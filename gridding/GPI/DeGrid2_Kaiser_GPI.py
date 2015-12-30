@@ -34,6 +34,13 @@ import numpy as np
 
 class ExternalNode(gpi.NodeAPI):
     """DeGridding module for Post-Cartesian Data - works with 2D data.
+
+    INPUT:
+        data: gridded k-space
+        coords: nD array sample locations (scaled between -0.5 and 0.5)
+    
+    OUTPUT:
+        out: k-space resampled at coordinate locations
     """
     def initUI(self):
         # Widgets

@@ -34,6 +34,20 @@ import numpy as np
 
 class ExternalNode(gpi.NodeAPI):
     """Gridding module for Post-Cartesian Data - works with 2D data.
+
+    WIDGET:
+        mtx size (n x n): grid matrix size 'n'
+        dims per set: dimensions of the sample coordinates (automatically set)
+
+    INPUT:
+        data: nD array of sampled k-space data
+        coords: nD array sample locations (scaled between -0.5 and 0.5)
+        weights: density compensation
+    
+    OUTPUT:
+        out: gridded k-space
+        deapodization: grid kernel compensation to be multiplied by gridded
+                       data after fft (if desired).
     """
     def initUI(self):
         # Widgets

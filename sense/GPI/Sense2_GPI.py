@@ -41,16 +41,25 @@ class ExternalNode(gpi.NodeAPI):
     * Shewchuk, Jonathan Richard. "An introduction to the conjugate gradient
       method without the agonizing pain." (1994).
 
-    INPUT:
-        data - raw k-space data
-        crds - trajectory coordinates scaled from -0.5 to 0.5
-        weights - sample density weights for gridding
-        coil sensitivity - non-conjugated sensitivity maps
-    OUTPUT:
-        
     WIDGETS:
-        mtx - the matrix to be used for gridding (this is the size used no
+        mtx: the matrix to be used for gridding (this is the size used no
               extra scaling is added)
+        iterations: number of iterations to complete before terminating
+        step: execute an additional iteration (will add to 'iterations')
+        Autocalibration Width (%): percentage of pixels to use for B1 est.
+        Autocalibration Taper (%): han window taper for blurring.
+
+    INPUT:
+        data: raw k-space data
+        crds: trajectory coordinates scaled from -0.5 to 0.5
+        weights: sample density weights for gridding
+        coil sensitivity: non-conjugated sensitivity maps
+
+    OUTPUT:
+        x: solution at the current iteration
+        r: residualt at the current iteration
+        d: direction at the current iteration
+        Autocalibration CSM: B1-recv estimated using the central k-space points
     """
 
     def initUI(self):
