@@ -34,7 +34,7 @@
 #ifndef GRIDDING_CPP_GUARD
 #define GRIDDING_CPP_GUARD
 
-#include "nick/oldgridding/kaiserbessel.cpp"
+#include "kaiserbessel.cpp"
 
 #define DEFAULT_KERNEL_TABLE_SIZE 400
 #define _sqr(__se) ((__se)*(__se))

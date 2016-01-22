@@ -38,7 +38,7 @@ using namespace PyFI::FFTW;
 #include <iostream>
 using namespace std;
 
-#include "nick/oldgridding/gridding.cpp"
+#include "gridding.cpp"
 
 PYFI_FUNC(grid)
 {
