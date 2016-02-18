@@ -110,7 +110,7 @@ class ExternalNode(gpi.NodeAPI):
 
         # grid all slices
         dx = dy = 0.
-        for i in range(np.prod(iter_shape)):
+        for i in range(int(np.prod(iter_shape))):
             out_iter[i] = gd.grid(crds, data_iter[i], weights, outdim, dx, dy)
 
         self.setData('out', out)
