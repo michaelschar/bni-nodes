@@ -67,8 +67,9 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('SpinBox', 'mtx', val=300, min=1)
         self.addWidget('SpinBox', 'iterations', val=10, min=1)
         self.addWidget('PushButton', 'step')
-        self.addWidget('Slider', 'Autocalibration Width (%)', val=3, min=0, max=100)
-        self.addWidget('Slider', 'Autocalibration Taper (%)', val=25, min=0, max=100)
+        self.addWidget('Slider', 'Autocalibration Width (%)', val=10, min=0, max=100)
+        self.addWidget('Slider', 'Autocalibration Taper (%)', val=50, min=0, max=100)
+        self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
 
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=np.complex64)
@@ -93,9 +94,11 @@ class ExternalNode(gpi.NodeAPI):
         if csm is None:
             self.setAttr('Autocalibration Width (%)', visible=True)
             self.setAttr('Autocalibration Taper (%)', visible=True)
+            self.setAttr('Mask Floor (% of max mag)', visible=True)
         else:
             self.setAttr('Autocalibration Width (%)', visible=False)
             self.setAttr('Autocalibration Taper (%)', visible=False)
+            self.setAttr('Mask Floor (% of max mag)', visible=False)
 
     def compute(self):
         
@@ -177,6 +180,7 @@ class ExternalNode(gpi.NodeAPI):
             x = np.zeros_like(d)
             Ad = Ad_0
 
+
         # CG - iter 1
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
 
@@ -197,6 +201,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad = self.loop2(self.grid2, Ad, mtx, coords, weights)
             Ad = self.loop2(self.fft2, Ad, dir=0)
             Ad *= roll
+
             Ad = csm_conj * Ad # broadcast multiply to remove coil phase
             Ad = Ad.sum(axis=0) # assume the coil dim is the first
 
@@ -256,7 +261,7 @@ class ExternalNode(gpi.NodeAPI):
         data.shape = loop_shape
 
         outdata = None
-        for i in range(loops):
+        for i in range(int(loops)):
             fresult = func(data[i], *args, **kwargs)
             fresult = np.expand_dims(fresult, 0) # add a dim for appending to
             if i == 0:
@@ -312,7 +317,7 @@ class ExternalNode(gpi.NodeAPI):
 
         return corefft.fftw(data, outdims, **kwargs)
 
-    def rolloff2(self, mtx_xy, clamp_min_percent=5):
+    def rolloff2(self, mtx_xy, clamp_min_percent=10):
         # mtx_xy: int
         import numpy as np
         import bni.gridding.grid_kaiser as gd
@@ -363,6 +368,7 @@ class ExternalNode(gpi.NodeAPI):
         # get UI params
         taper = self.getVal('Autocalibration Taper (%)')
         width = self.getVal('Autocalibration Width (%)')
+        mask_floor = self.getVal('Mask Floor (% of max mag)')
 
         # generate window function for blurring image data
         win = self.window2(images.shape[-2:], windowpct=taper, widthpct=width)
@@ -373,7 +379,12 @@ class ExternalNode(gpi.NodeAPI):
 
         # transform back into image space and normalize
         csm = self.loop2(self.fft2, kspace, dir=0)
-        csm = csm / np.sqrt(np.sum(np.abs(csm)**2, axis=0))
+        rms = np.sqrt(np.sum(np.abs(csm)**2, axis=0))
+        csm = csm / rms
+
+        # zero out points that are below the mask threshold
+        thresh = mask_floor/100.0 * rms.max()
+        csm *= rms > thresh
 
         return csm
 
