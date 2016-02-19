@@ -72,10 +72,10 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
 
         # IO Ports
-        self.addInPort('data', 'NPYarray', dtype=np.complex64)
-        self.addInPort('crds', 'NPYarray', dtype=np.float32)
-        self.addInPort('weights', 'NPYarray', dtype=np.float32)
-        self.addInPort('coil sensitivity', 'NPYarray', dtype=np.complex64, obligation=gpi.OPTIONAL)
+        self.addInPort('data', 'NPYarray', dtype=[np.complex64, np.complex128])
+        self.addInPort('crds', 'NPYarray', dtype=[np.float32, np.float64])
+        self.addInPort('weights', 'NPYarray', dtype=[np.float32, np.float64])
+        self.addInPort('coil sensitivity', 'NPYarray', dtype=[np.complex64, np.complex128], obligation=gpi.OPTIONAL)
         self.addOutPort('x', 'NPYarray', ndim=2, dtype=np.complex64)
         self.addOutPort('r', 'NPYarray', ndim=2, dtype=np.complex64)
         self.addOutPort('d', 'NPYarray', ndim=2, dtype=np.complex64)
@@ -103,10 +103,13 @@ class ExternalNode(gpi.NodeAPI):
     def compute(self):
         
         print('Start SENSE')
-        data = self.getData('data')
-        coords = self.getData('crds')
-        weights = self.getData('weights')
+        data = self.getData('data').astype(np.complex64, copy=False)
+        coords = self.getData('crds').astype(np.float32, copy=False)
+        weights = self.getData('weights').astype(np.float32, copy=False)
         csm = self.getData('coil sensitivity')
+        if csm is not None:
+            csm = csm.astype(np.complex64, copy=False)
+        
         mtx = self.getVal('mtx')
         iterations = self.getVal('iterations')
         step = self.getVal('step')
