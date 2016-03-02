@@ -76,9 +76,9 @@ class ExternalNode(gpi.NodeAPI):
         self.addInPort('crds', 'NPYarray', dtype=[np.float32, np.float64])
         self.addInPort('weights', 'NPYarray', dtype=[np.float32, np.float64])
         self.addInPort('coil sensitivity', 'NPYarray', dtype=[np.complex64, np.complex128], obligation=gpi.OPTIONAL)
-        self.addOutPort('x', 'NPYarray', ndim=2, dtype=np.complex64)
-        self.addOutPort('r', 'NPYarray', ndim=2, dtype=np.complex64)
-        self.addOutPort('d', 'NPYarray', ndim=2, dtype=np.complex64)
+        self.addOutPort('x', 'NPYarray', dtype=np.complex64)
+        self.addOutPort('r', 'NPYarray', dtype=np.complex64)
+        self.addOutPort('d', 'NPYarray', dtype=np.complex64)
         self.addOutPort('Autocalibrated CSM', 'NPYarray', dtype=np.complex64)
 
     def validate(self):
