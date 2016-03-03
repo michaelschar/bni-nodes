@@ -113,14 +113,17 @@ class ExternalNode(gpi.NodeAPI):
         mtx = self.getVal('mtx')
         iterations = self.getVal('iterations')
         step = self.getVal('step')
-
+        
+        # pre-calculate Kaiser-Bessel kernel
+        kernel_table_size = 800
+        kernel = self.kaiserbessel_kernel( kernel_table_size)
         # pre-calculate the rolloff for the spatial domain
-        roll = self.rolloff2(mtx)
+        roll = self.rolloff2(mtx, kernel)
 
         # grid (loop over coils) to create images that are corrupted by
         # aliasing due to undersampling.  If the k-space data have an
         # auto-calibration region, then this can be used to generate B1 maps.
-        images = self.loop2(self.grid2, data, mtx, coords, weights)
+        images = self.loop2(self.grid2, data, mtx, coords, weights, kernel)
         images = self.loop2(self.fft2, images, dir=0)
         images *= roll
 
@@ -152,8 +155,8 @@ class ExternalNode(gpi.NodeAPI):
             Ad = csm * d # add coil phase
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = self.loop2(self.fft2, Ad, dir=1)
-            Ad = self.loop2(self.degrid2, Ad, coords)
-            Ad = self.loop2(self.grid2, Ad, mtx, coords, weights)
+            Ad = self.loop2(self.degrid2, Ad, coords, kernel)
+            Ad = self.loop2(self.grid2, Ad, mtx, coords, weights, kernel)
             Ad = self.loop2(self.fft2, Ad, dir=0)
             Ad *= roll
             Ad = csm_conj * Ad # broadcast multiply to remove coil phase
@@ -171,8 +174,8 @@ class ExternalNode(gpi.NodeAPI):
             Ad_0 = csm * d_0 # add coil phase
             Ad_0 *= roll # pre-rolloff for degrid convolution
             Ad_0 = self.loop2(self.fft2, Ad_0, dir=1)
-            Ad_0 = self.loop2(self.degrid2, Ad_0, coords)
-            Ad_0 = self.loop2(self.grid2, Ad_0, mtx, coords, weights)
+            Ad_0 = self.loop2(self.degrid2, Ad_0, coords, kernel)
+            Ad_0 = self.loop2(self.grid2, Ad_0, mtx, coords, weights, kernel)
             Ad_0 = self.loop2(self.fft2, Ad_0, dir=0)
             Ad_0 *= roll
             Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
@@ -200,8 +203,8 @@ class ExternalNode(gpi.NodeAPI):
             Ad = csm * d # add coil phase
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = self.loop2(self.fft2, Ad, dir=1)
-            Ad = self.loop2(self.degrid2, Ad, coords)
-            Ad = self.loop2(self.grid2, Ad, mtx, coords, weights)
+            Ad = self.loop2(self.degrid2, Ad, coords, kernel)
+            Ad = self.loop2(self.grid2, Ad, mtx, coords, weights, kernel)
             Ad = self.loop2(self.fft2, Ad, dir=0)
             Ad *= roll
 
@@ -320,7 +323,7 @@ class ExternalNode(gpi.NodeAPI):
 
         return corefft.fftw(data, outdims, **kwargs)
 
-    def rolloff2(self, mtx_xy, clamp_min_percent=10):
+    def rolloff2(self, mtx_xy, kernel, clamp_min_percent=10):
         # mtx_xy: int
         import numpy as np
         import bni.gridding.grid_kaiser as gd
@@ -333,7 +336,7 @@ class ExternalNode(gpi.NodeAPI):
         outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
 
         # grid -> fft -> |x|
-        out = np.abs(self.fft2(gd.grid(coords,data,weights,outdim,dx,dy)))
+        out = np.abs(self.fft2(gd.grid(coords, data, weights, kernel, outdim, dx, dy)))
 
         # clamp the lowest values to a percentage of the max
         clamp = out.max() * clamp_min_percent/100.0
@@ -342,7 +345,7 @@ class ExternalNode(gpi.NodeAPI):
         # invert
         return 1.0/out
 
-    def grid2(self, data, mtx_xy, coords, weights):
+    def grid2(self, data, mtx_xy, coords, weights, kernel):
         # mtx_xy: int
         # coords: np.float32
         # data: np.complex64
@@ -356,11 +359,11 @@ class ExternalNode(gpi.NodeAPI):
         import bni.gridding.grid_kaiser as gd
         dx = dy = 0.0
         outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
-        return gd.grid(coords,data,weights,outdim,dx,dy)
+        return gd.grid(coords, data, weights, kernel, outdim, dx, dy)
 
-    def degrid2(self, gridded_data, coords):
+    def degrid2(self, gridded_data, coords, kernel):
         import bni.gridding.grid_kaiser as dg
-        return dg.degrid(coords, gridded_data)
+        return dg.degrid(coords, gridded_data, kernel)
 
     def execType(self):
         # numpy linalg fails if this isn't a thread :(
@@ -419,3 +422,13 @@ class ExternalNode(gpi.NodeAPI):
         out[passIdx] = passVal
 
         return out
+
+    def kaiserbessel_kernel(self, kernel_table_size):
+        #   Generate a Kaiser-Bessel kernel function
+        #   OUTPUT: 1D kernel table for radius squared
+
+        import bni.gridding.grid_kaiser as dg
+        kernel_dim = np.array([kernel_table_size],dtype=np.int64)
+        return dg.kaiserbessel_kernel(kernel_dim)
+
+

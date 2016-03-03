@@ -72,23 +72,21 @@ static double i0(double x)
 }
 
 
-Array<float> kaiserbessel(int size)
+void _kaiserbessel(Array<float> &kernel_table_out)
 {
     int i;
-    Array<float> out(size);
+    int size = kernel_table_out.dimensions(0);
     assert(size > 0);
 
     for (i=1; i<size-1; i++)
     {
-        get1(out, i) = __kernel(sqrt(i/(double)(size-1))); // kernel table for radius squared
-        assert(!isnan(get1(out, i)));
+        get1(kernel_table_out, i) = __kernel(sqrt(i/(double)(size-1))); // kernel table for radius squared
+        assert(!isnan(get1(kernel_table_out, i)));
     }
-    get1(out, 0) = 1.0;
-    get1(out, size-1) = 0.0;
+    get1(kernel_table_out, 0) = 1.0;
+    get1(kernel_table_out, size-1) = 0.0;
 
-    assert(fabs(get1(out, 0) - __kernel(0.00000000001)) <= 0.00001);
-
-    return out;
+    assert(fabs(get1(kernel_table_out, 0) - __kernel(0.00000000001)) <= 0.00001);
 }
 
 #endif // GUARD

@@ -48,13 +48,14 @@ PYFI_FUNC(grid)
     PYFI_POSARG(Array<float>, crds);
     PYFI_POSARG(Array<complex<float> >, data);
     PYFI_POSARG(Array<float>, weights);
+    PYFI_POSARG(Array<float>, kernel);
     PYFI_POSARG(Array<int64_t>, outdim);
     PYFI_POSARG(double, dx);
     PYFI_POSARG(double, dy);
 
     PYFI_SETOUTPUT_ALLOC_DIMS(Array<complex<float> >, outdata, outdim->size(), outdim->as_ULONG());
 
-    _grid2(*data, *crds, *weights, *outdata, (float)*dx, (float)*dy);
+    _grid2(*data, *crds, *weights, *outdata, *kernel, (float)*dx, (float)*dy);
 
     PYFI_END(); /* This must be the last line */
 } /* grid */
@@ -65,12 +66,13 @@ PYFI_FUNC(rolloff)
 
     /* input */
     PYFI_POSARG(Array<complex<float> >, data);
+    PYFI_POSARG(Array<float>, kernel);
     PYFI_POSARG(Array<int64_t>, outdim);
     PYFI_POSARG(long, isofov);
 
     PYFI_SETOUTPUT_ALLOC_DIMS(Array<complex<float> >, outdata, outdim->size(), outdim->as_ULONG());
 
-    _rolloff2(*data, *outdata, (int32_t) *isofov);
+    _rolloff2(*data, *outdata, *kernel, (int32_t) *isofov);
 
     PYFI_END(); /* This must be the last line */
 } /* rolloff */
@@ -82,19 +84,34 @@ PYFI_FUNC(degrid)
     /* input */
     PYFI_POSARG(Array<float>, crds);
     PYFI_POSARG(Array<complex<float> >, data);
+    PYFI_POSARG(Array<float>, kernel);
 
     std::vector<uint64_t> outdim = crds->dimensions_vector();
     outdim.erase(outdim.begin());
 
     PYFI_SETOUTPUT_ALLOC(Array<complex<float> >, outdata, outdim);
 
-    _degrid2(*data, *crds, *outdata);
+    _degrid2(*data, *crds, *outdata, *kernel);
 
     PYFI_END(); /* This must be the last line */
 } /* grid */
+
+PYFI_FUNC(kaiserbessel_kernel)
+{
+    PYFI_START(); /* This must be the first line */
+    
+    /* input */
+    PYFI_POSARG(Array<int64_t>, outdim);
+    
+    PYFI_SETOUTPUT_ALLOC_DIMS(Array<float>, outdata, outdim->size(), outdim->as_ULONG());
+    _kaiserbessel(*outdata);
+    
+    PYFI_END(); /* This must be the last line */
+}
 
 PYFI_LIST_START_
     PYFI_DESC(grid, "Convolve points to a Cartesian grid.")
     PYFI_DESC(degrid, "Convolve points from a Cartesian grid to non-Cartesian coordinates.")
     PYFI_DESC(rolloff, "Rolloff Correction for the standard gridding calculation")
+    PYFI_DESC(kaiserbessel_kernel, "Generate a Kaiser-Bessel kernel function")
 PYFI_LIST_END_

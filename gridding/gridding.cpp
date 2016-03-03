@@ -36,7 +36,6 @@
 
 #include "bni/gridding/kaiserbessel.cpp"
 
-#define DEFAULT_KERNEL_TABLE_SIZE 400
 #define _sqr(__se) ((__se)*(__se))
 #define dist2(_x,_y) (_sqr(_x)+_sqr(_y))
 
@@ -57,12 +56,12 @@ void set_minmax(T x, int *min, int *max, int maximum, T radius)
  *  coords: nD array with 2-vec.
  *  weights: nD array with 1-vec (dims equal to coords array).  This holds the
  *           density compensation for each gridded point.
+ *  kernel_table: 1D array with Kaiser-Bessel kernel table
  *  out: 2D array with equal dimensions (m == n).
  *  dx, dy: scaler pixel shift in
  */
 template<class T>
-void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<complex<T> > &out,
-        T dx, T dy)
+void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<complex<T> > &out, Array<T> &kernel_table, T dx, T dy)
 {
     int imin, imax, jmin, jmax, i, j;
     int width = out.dimensions(0); // assume isotropic dims
@@ -73,7 +72,6 @@ void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<
     T kernelRadius_sqr = kernelRadius * kernelRadius;
     T width_inv = 1.0 / width;
 
-    Array<T> kernel_table = kaiserbessel(DEFAULT_KERNEL_TABLE_SIZE);
     T dist_multiplier = (kernel_table.dimensions(0) - 1)/kernelRadius_sqr;
 
     out = complex<T>(0.0);
@@ -118,9 +116,10 @@ void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<
  *  data: 2D array with equal dimensions (m == n).
  *  coords: nD array with 2-vec.
  *  out: nD array with 1-vec dimensions equal to coords array.
+ *  kernel_table: 1D array with Kaiser-Bessel kernel table
  */
 template<class T>
-void _degrid2(Array<complex<T> > &data, Array<T> &coords, Array<complex<T> > &out)
+void _degrid2(Array<complex<T> > &data, Array<T> &coords, Array<complex<T> > &out, Array<T> &kernel_table)
 {
     int imin, imax, jmin, jmax, i, j;
     int width = data.dimensions(0); // assume isotropic dims
@@ -131,7 +130,6 @@ void _degrid2(Array<complex<T> > &data, Array<T> &coords, Array<complex<T> > &ou
     T kernelRadius_sqr = kernelRadius * kernelRadius;
     T width_inv = 1.0 / width;
 
-    Array<T> kernel_table = kaiserbessel(DEFAULT_KERNEL_TABLE_SIZE);
     T dist_multiplier = (kernel_table.dimensions(0) - 1)/kernelRadius_sqr;
 
     out = complex<T>(0.0);
@@ -200,10 +198,11 @@ void crop_circle (Array<complex<T> > &in)
 /* ROLLOFF
  * Deapodize by sampling 2D grid kernel.
  * in: 2D array (m == n)
+ *  kernel_table: 1D array with Kaiser-Bessel kernel table
  * out: 2D array
  */
 template<class T>
-void _rolloff2(Array<complex<T> > &in, Array<complex<T> > &out, int32_t cropfilt)
+void _rolloff2(Array<complex<T> > &in, Array<complex<T> > &out, Array<T> &kernel_table, int32_t cropfilt)
 {
     /* get grid dimensionality for scaling */
     int64_t gridMtx = in.dimensions(0);
@@ -221,7 +220,7 @@ void _rolloff2(Array<complex<T> > &in, Array<complex<T> > &out, int32_t cropfilt
     /* create another grid the same size as the oversampled grid 
      * to hold the deapodization filter. */
     Array<complex<T> > rolloff(in.dimensions_vector());
-    _grid2(delta_dat, delta_crd, delta_wgt, rolloff, (T) 0., (T) 0.);
+    _grid2(delta_dat, delta_crd, delta_wgt, rolloff, kernel_table, (T) 0., (T) 0.);
     fft2(rolloff, rolloff, FFTW_FORWARD);
 
     /* take magnitude of each element and divide */
