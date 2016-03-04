@@ -80,6 +80,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addOutPort('r', 'NPYarray', dtype=np.complex64)
         self.addOutPort('d', 'NPYarray', dtype=np.complex64)
         self.addOutPort('Autocalibrated CSM', 'NPYarray', dtype=np.complex64)
+        self.addOutPort('x iterations', 'NPYarray', dtype=np.complex64)
 
     def validate(self):
 
@@ -113,6 +114,9 @@ class ExternalNode(gpi.NodeAPI):
         mtx = self.getVal('mtx')
         iterations = self.getVal('iterations')
         step = self.getVal('step')
+        
+        # output including all iterations
+        x_iterations = np.zeros([iterations,mtx,mtx],dtype=np.complex64)
         
         # pre-calculate Kaiser-Bessel kernel
         kernel_table_size = 800
@@ -189,6 +193,8 @@ class ExternalNode(gpi.NodeAPI):
 
         # CG - iter 1
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
+        
+        x_iterations[0,:,:] = x_last
 
         ## Iterations >1:
         for i in range(iterations-1):
@@ -213,11 +219,13 @@ class ExternalNode(gpi.NodeAPI):
 
             # CG
             d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
+            x_iterations[i+1,:,:] = x_last
 
         # return the final image     
         self.setData('d', d_last)
         self.setData('r', r_last)
         self.setData('x', x_last)
+        self.setData('x iterations', x_iterations)
 
         return 0
 
