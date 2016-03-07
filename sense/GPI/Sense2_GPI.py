@@ -67,6 +67,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('SpinBox', 'mtx', val=300, min=1)
         self.addWidget('SpinBox', 'iterations', val=10, min=1)
         self.addWidget('PushButton', 'step')
+        self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
         self.addWidget('Slider', 'Autocalibration Width (%)', val=10, min=0, max=100)
         self.addWidget('Slider', 'Autocalibration Taper (%)', val=50, min=0, max=100)
         self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
@@ -111,16 +112,31 @@ class ExternalNode(gpi.NodeAPI):
         if csm is not None:
             csm = csm.astype(np.complex64, copy=False)
         
-        mtx = self.getVal('mtx')
+        mtx_original = self.getVal('mtx')
         iterations = self.getVal('iterations')
         step = self.getVal('step')
+        oversampling_ratio = self.getVal('oversampling ratio')
+        
+        # oversampling: Oversample at the beginning and crop at the end
+        mtx = np.int(mtx_original * oversampling_ratio)
+        if mtx%2:
+            mtx+=1
+        if oversampling_ratio > 1:
+            mtx_min = np.int((mtx-mtx_original)/2)
+            mtx_max = mtx_min + mtx_original
+        else:
+            mtx_min = 0
+            mtx_max = mtx
+        self.log.debug(mtx_min)
+        self.log.debug(mtx_max)
+        
         
         # output including all iterations
-        x_iterations = np.zeros([iterations,mtx,mtx],dtype=np.complex64)
+        x_iterations = np.zeros([iterations,mtx_original,mtx_original],dtype=np.complex64)
         
         # pre-calculate Kaiser-Bessel kernel
         kernel_table_size = 800
-        kernel = self.kaiserbessel_kernel( kernel_table_size)
+        kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         # pre-calculate the rolloff for the spatial domain
         roll = self.rolloff2(mtx, kernel)
 
@@ -194,7 +210,7 @@ class ExternalNode(gpi.NodeAPI):
         # CG - iter 1
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
         
-        x_iterations[0,:,:] = x_last
+        x_iterations[0,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
 
         ## Iterations >1:
         for i in range(iterations-1):
@@ -219,7 +235,7 @@ class ExternalNode(gpi.NodeAPI):
 
             # CG
             d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-            x_iterations[i+1,:,:] = x_last
+            x_iterations[i+1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
 
         # return the final image     
         self.setData('d', d_last)
@@ -431,12 +447,12 @@ class ExternalNode(gpi.NodeAPI):
 
         return out
 
-    def kaiserbessel_kernel(self, kernel_table_size):
+    def kaiserbessel_kernel(self, kernel_table_size, oversampling_ratio):
         #   Generate a Kaiser-Bessel kernel function
         #   OUTPUT: 1D kernel table for radius squared
 
         import bni.gridding.grid_kaiser as dg
         kernel_dim = np.array([kernel_table_size],dtype=np.int64)
-        return dg.kaiserbessel_kernel(kernel_dim)
+        return dg.kaiserbessel_kernel(kernel_dim, np.float64(oversampling_ratio))
 
 

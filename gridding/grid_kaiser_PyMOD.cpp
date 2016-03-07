@@ -102,9 +102,10 @@ PYFI_FUNC(kaiserbessel_kernel)
     
     /* input */
     PYFI_POSARG(Array<int64_t>, outdim);
+    PYFI_POSARG(double, oversampling_ratio);
     
     PYFI_SETOUTPUT_ALLOC_DIMS(Array<float>, outdata, outdim->size(), outdim->as_ULONG());
-    _kaiserbessel(*outdata);
+    _kaiserbessel(*outdata, *oversampling_ratio);
     
     PYFI_END(); /* This must be the last line */
 }

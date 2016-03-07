@@ -37,13 +37,10 @@
  *   Transactions on 24.6 (2005): 799-808.
  */
 
-#define OVERSAMPLING_RATIO         1.5
 #define KERNEL_WIDTH               5.0  // in k-space pixels
 #define DEFAULT_RADIUS_FOV_PRODUCT ((KERNEL_WIDTH) / 2.0)
 
 #define sqr(__se)          ((__se)*(__se))
-#define BETA               (M_PI*sqrt(sqr(KERNEL_WIDTH/OVERSAMPLING_RATIO*(OVERSAMPLING_RATIO-0.5))-0.8))
-#define __kernel(__radius) (i0 (BETA * sqrt (1 - sqr(__radius))) / (i0(BETA)))
 
 /*------------------------------------------------------------*/
 /* PURPOSE: Evaluate modified Bessel function In(x) and n=0.  */
@@ -71,16 +68,21 @@ static double i0(double x)
     return ans;
 }
 
+static double kernel(double radius, double beta)
+{
+    return (i0 (beta * sqrt (1 - sqr(radius))) / (i0(beta)));
+}
 
-void _kaiserbessel(Array<float> &kernel_table_out)
+void _kaiserbessel(Array<float> &kernel_table_out, double &oversampling_ratio)
 {
     int i;
     int size = kernel_table_out.dimensions(0);
+    double beta = (M_PI*sqrt(sqr(KERNEL_WIDTH/oversampling_ratio*(oversampling_ratio-0.5))-0.8));
     assert(size > 0);
 
     for (i=1; i<size-1; i++)
     {
-        get1(kernel_table_out, i) = __kernel(sqrt(i/(double)(size-1))); // kernel table for radius squared
+        get1(kernel_table_out, i) = kernel( sqrt(i/(double)(size-1)), beta); // kernel table for radius squared
         assert(!isnan(get1(kernel_table_out, i)));
     }
     get1(kernel_table_out, 0) = 1.0;
