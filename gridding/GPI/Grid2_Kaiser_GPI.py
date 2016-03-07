@@ -53,11 +53,13 @@ class ExternalNode(gpi.NodeAPI):
         # Widgets
         self.addWidget('SpinBox','mtx size (n x n)', min=5, val=240)
         self.addWidget('Slider','dims per set', min=1, val=2)
+        self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
+        self.addWidget('PushButton', 'Add FFT and rolloff', toggle=True, button_title='ON', val=1)
 
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=np.complex64, obligation=gpi.REQUIRED)
-        self.addInPort('coords', 'NPYarray', dtype=np.float32, obligation=gpi.REQUIRED)
-        self.addInPort('weights', 'NPYarray', dtype=np.float32, obligation=gpi.REQUIRED)
+        self.addInPort('coords', 'NPYarray', dtype=[np.float64, np.float32], obligation=gpi.REQUIRED)
+        self.addInPort('weights', 'NPYarray', dtype=[np.float64, np.float32], obligation=gpi.REQUIRED)
         self.addOutPort('out', 'NPYarray', dtype=np.complex64)
         self.addOutPort('deapodization', 'NPYarray')
 
@@ -68,20 +70,6 @@ class ExternalNode(gpi.NodeAPI):
         crds = self.getData('coords')
         self.setAttr('dims per set', max=data.ndim)
 
-        # Force the dims per set to be an dimension in excess of the coords
-        # dimensions. This assumes the coords don't change between sets.
-        self.setAttr('dims per set', quietval=crds.ndim-1)
-
-        # Check for rolloff calc
-        #   * Re-calc only if the dimensions changed
-        d = self.getData('deapodization')
-        dimensionsxy = self.getVal('mtx size (n x n)')
-        if d is None:
-            self.setData('deapodization', self.rolloff2(dimensionsxy))
-        else:
-            if list(d.shape) != [dimensionsxy, dimensionsxy]:
-                self.setData('deapodization', self.rolloff2(dimensionsxy))
-
         return 0
 
     def compute(self):
@@ -89,31 +77,72 @@ class ExternalNode(gpi.NodeAPI):
         import numpy as np
         import bni.gridding.grid_kaiser as gd
 
-        crds = self.getData('coords')
-        data = self.getData('data')
-        weights = self.getData('weights')
-        dimensionsxy = self.getVal('mtx size (n x n)')
+        crds = self.getData('coords').astype(np.float32, copy=False)
+        data = self.getData('data').astype(np.complex64, copy=False)
+        weights = self.getData('weights').astype(np.float32, copy=False)
+        mtx_original = self.getVal('mtx size (n x n)')
         dimsperset = self.getVal('dims per set')
+        oversampling_ratio = self.getVal('oversampling ratio')
+        fft_and_rolloff = self.getVal('Add FFT and rolloff')
+
+        mtx = np.int(mtx_original * oversampling_ratio)
+        if mtx%2:
+            mtx+=1
+        if fft_and_rolloff:
+            if oversampling_ratio > 1:
+                mtx_min = np.int((mtx-mtx_original)/2)
+                mtx_max = mtx_min + mtx_original
+            else:
+                mtx_min = 0
+                mtx_max = mtx
+
+        # pre-calculate Kaiser-Bessel kernel
+        kernel_table_size = 800
+        kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
+        # pre-calculate the rolloff for the spatial domain
+        roll = self.rolloff2(mtx, kernel)
+        self.setData('deapodization', roll)
 
         # construct an output array w/ slice dims
         data_iter, iter_shape = self.pinch(data, stop=-dimsperset)
+        if iter_shape == []:
+            iter_shape = [1]
+        
+        if fft_and_rolloff:
+            # assume the last dims (i.e. each image) must be gridded independently
+            # shape = [..., n, n], where 'n' is the image dimensions
+            image_shape = [mtx_original, mtx_original]
+            out_shape = iter_shape + image_shape
+            out = np.zeros(out_shape, dtype=data.dtype)
+            out_iter,_ = self.pinch(out, stop=-dimsperset)
+            
+            # tell the grid routine what shape to produce
+            outdim = np.array([mtx,mtx], dtype=np.int64)
+            
+            # grid all slices
+            dx = dy = 0.
+            for i in range(int(np.prod(iter_shape))):
+                gridded_kspace = gd.grid(crds, data_iter[i], weights, kernel, outdim, dx, dy)
+                gridded_kspace = self.fft2(gridded_kspace, dir=0)
+                gridded_kspace *=roll
+                out_iter[i] = gridded_kspace[mtx_min:mtx_max,mtx_min:mtx_max]
+        else:
+            # assume the last dims (i.e. each image) must be gridded independently
+            # shape = [..., n, n], where 'n' is the image dimensions
+            image_shape = [mtx, mtx]
+            out_shape = iter_shape + image_shape
+            out = np.zeros(out_shape, dtype=data.dtype)
+            out_iter,_ = self.pinch(out, stop=-dimsperset)
 
-        # assume the last dims (i.e. each image) must be gridded independently
-        # shape = [..., n, n], where 'n' is the image dimensions
-        image_shape = [dimensionsxy, dimensionsxy]
-        out_shape = iter_shape + image_shape
-        out = np.zeros(out_shape, dtype=data.dtype)
-        out_iter,_ = self.pinch(out, stop=-dimsperset)
-
-        # tell the grid routine what shape to produce
-        outdim = np.array(image_shape, dtype=np.int64) 
-
-        # grid all slices
-        dx = dy = 0.
-        for i in range(int(np.prod(iter_shape))):
-            out_iter[i] = gd.grid(crds, data_iter[i], weights, outdim, dx, dy)
-
-        self.setData('out', out)
+            # tell the grid routine what shape to produce
+            outdim = np.array(image_shape, dtype=np.int64)
+            
+            # grid all slices
+            dx = dy = 0.
+            for i in range(int(np.prod(iter_shape))):
+                out_iter[i] = gd.grid(crds, data_iter[i], weights, kernel, outdim, dx, dy)
+  
+        self.setData('out', out.squeeze())
 
         return 0 
 
@@ -151,7 +180,7 @@ class ExternalNode(gpi.NodeAPI):
 
         return corefft.fftw(data, outdims, **kwargs)
 
-    def rolloff2(self, mtx_xy, clamp_min_percent=5):
+    def rolloff2(self, mtx_xy, kernel, clamp_min_percent=5):
         # mtx_xy: int
         import numpy as np
         import bni.gridding.grid_kaiser as gd
@@ -164,7 +193,7 @@ class ExternalNode(gpi.NodeAPI):
         outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
 
         # grid -> fft -> |x|
-        out = np.abs(self.fft2(gd.grid(coords,data,weights,outdim,dx,dy)))
+        out = np.abs(self.fft2(gd.grid(coords, data, weights, kernel, outdim, dx, dy)))
 
         # clamp the lowest values to a percentage of the max
         clamp = out.max() * clamp_min_percent/100.0
@@ -194,3 +223,11 @@ class ExternalNode(gpi.NodeAPI):
         out_shape = s[:start] + [np.prod(iter_shape)] + s[stop:]
         out.shape = out_shape
         return out, iter_shape
+
+    def kaiserbessel_kernel(self, kernel_table_size, oversampling_ratio):
+        #   Generate a Kaiser-Bessel kernel function
+        #   OUTPUT: 1D kernel table for radius squared
+    
+        import bni.gridding.grid_kaiser as dg
+        kernel_dim = np.array([kernel_table_size],dtype=np.int64)
+        return dg.kaiserbessel_kernel(kernel_dim, np.float64(oversampling_ratio))
