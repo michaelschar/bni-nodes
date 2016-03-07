@@ -77,6 +77,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addInPort('crds', 'NPYarray', dtype=[np.float32, np.float64])
         self.addInPort('weights', 'NPYarray', dtype=[np.float32, np.float64])
         self.addInPort('coil sensitivity', 'NPYarray', dtype=[np.complex64, np.complex128], obligation=gpi.OPTIONAL)
+        self.addOutPort('out', 'NPYarray', dtype=np.complex64)
         self.addOutPort('x', 'NPYarray', dtype=np.complex64)
         self.addOutPort('r', 'NPYarray', dtype=np.complex64)
         self.addOutPort('d', 'NPYarray', dtype=np.complex64)
@@ -130,7 +131,9 @@ class ExternalNode(gpi.NodeAPI):
         
         # output including all iterations
         x_iterations = np.zeros([iterations,mtx_original,mtx_original],dtype=np.complex64)
-        
+        if step and (iterations > 1):
+            x_iterations[:-1,:,:] = self.getData('x iterations')
+
         # pre-calculate Kaiser-Bessel kernel
         kernel_table_size = 800
         kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
@@ -207,7 +210,10 @@ class ExternalNode(gpi.NodeAPI):
         # CG - iter 1
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
         
-        x_iterations[0,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
+        if step:
+            x_iterations[-1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
+        else:
+            x_iterations[0,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
 
         ## Iterations >1:
         for i in range(iterations-1):
@@ -235,9 +241,10 @@ class ExternalNode(gpi.NodeAPI):
             x_iterations[i+1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
 
         # return the final image     
-        self.setData('d', d_last[mtx_min:mtx_max,mtx_min:mtx_max])
-        self.setData('r', r_last[mtx_min:mtx_max,mtx_min:mtx_max])
-        self.setData('x', x_last[mtx_min:mtx_max,mtx_min:mtx_max])
+        self.setData('d', d_last)
+        self.setData('r', r_last)
+        self.setData('x', x_last)
+        self.setData('out', x_last[mtx_min:mtx_max,mtx_min:mtx_max])
         self.setData('x iterations', x_iterations)
 
         return 0
