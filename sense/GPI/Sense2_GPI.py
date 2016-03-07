@@ -71,6 +71,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('Slider', 'Autocalibration Width (%)', val=10, min=0, max=100)
         self.addWidget('Slider', 'Autocalibration Taper (%)', val=50, min=0, max=100)
         self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
+        self.addWidget('PushButton', 'Dynamic data - average all dynamics for csm', toggle=True, button_title='ON', val=1)
 
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=[np.complex64, np.complex128])
@@ -98,10 +99,15 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('Autocalibration Width (%)', visible=True)
             self.setAttr('Autocalibration Taper (%)', visible=True)
             self.setAttr('Mask Floor (% of max mag)', visible=True)
+            if self.getData('data').ndim > 3:
+                self.setAttr('Dynamic data - average all dynamics for csm', visible=True)
+            else:
+                self.setAttr('Dynamic data - average all dynamics for csm', visible=False)
         else:
             self.setAttr('Autocalibration Width (%)', visible=False)
             self.setAttr('Autocalibration Taper (%)', visible=False)
             self.setAttr('Mask Floor (% of max mag)', visible=False)
+            self.setAttr('Dynamic data - average all dynamics for csm', visible=False)
 
     def compute(self):
         
@@ -118,6 +124,14 @@ class ExternalNode(gpi.NodeAPI):
         step = self.getVal('step')
         oversampling_ratio = self.getVal('oversampling ratio')
         
+        # breaking the beauty of the loop2 function, but I'm wasting too much time here..
+        if data.ndim == 3:
+            nr_slices_or_dynamics = 1
+        elif data.ndim == 4:
+            nr_slices_or_dynamics = data.shape[-3]
+        elif data.ndim > 4:
+            self.log.warn("Not properly implemented")
+        
         # oversampling: Oversample at the beginning and crop at the end
         mtx = np.int(mtx_original * oversampling_ratio)
         if mtx%2:
@@ -130,7 +144,7 @@ class ExternalNode(gpi.NodeAPI):
             mtx_max = mtx
         
         # output including all iterations
-        x_iterations = np.zeros([iterations,mtx_original,mtx_original],dtype=np.complex64)
+        x_iterations = np.zeros([iterations,nr_slices_or_dynamics,mtx_original,mtx_original],dtype=np.complex64)
         if step and (iterations > 1):
             x_iterations[:-1,:,:] = self.getData('x iterations')
 
@@ -154,7 +168,11 @@ class ExternalNode(gpi.NodeAPI):
         else:
             # make sure input csm are the same mtx size
             csm = self.pad2(csm, mtx)
-        self.setData('Autocalibrated CSM', csm[:,mtx_min:mtx_max,mtx_min:mtx_max])
+        if nr_slices_or_dynamics == 1:
+            csm_out = csm[:,mtx_min:mtx_max,mtx_min:mtx_max]
+        else:
+            csm_out = csm[:,:,mtx_min:mtx_max,mtx_min:mtx_max]
+        self.setData('Autocalibrated CSM', csm_out)
 
         # keep a conjugate csm set on hand
         csm_conj = np.conj(csm)
@@ -210,10 +228,12 @@ class ExternalNode(gpi.NodeAPI):
         # CG - iter 1
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
         
+        current_iteration = x_last
+        current_iteration.shape = [nr_slices_or_dynamics,mtx,mtx]
         if step:
-            x_iterations[-1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
+            x_iterations[-1,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
         else:
-            x_iterations[0,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
+            x_iterations[0,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
 
         ## Iterations >1:
         for i in range(iterations-1):
@@ -238,14 +258,17 @@ class ExternalNode(gpi.NodeAPI):
 
             # CG
             d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-            x_iterations[i+1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
+
+            current_iteration = x_last
+            current_iteration.shape = [nr_slices_or_dynamics,mtx,mtx]
+            x_iterations[i+1,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
 
         # return the final image     
         self.setData('d', d_last)
         self.setData('r', r_last)
         self.setData('x', x_last)
-        self.setData('out', x_last[mtx_min:mtx_max,mtx_min:mtx_max])
-        self.setData('x iterations', x_iterations)
+        self.setData('out', np.squeeze(current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]))
+        self.setData('x iterations', np.squeeze(x_iterations))
 
         return 0
 
@@ -403,12 +426,20 @@ class ExternalNode(gpi.NodeAPI):
         taper = self.getVal('Autocalibration Taper (%)')
         width = self.getVal('Autocalibration Width (%)')
         mask_floor = self.getVal('Mask Floor (% of max mag)')
+        average_csm = self.getVal('Dynamic data - average all dynamics for csm')
+        
+        # Dynamic data - average all dynamics for csm
+        if ( (images.ndim > 3) and (average_csm) ):
+            nr_dynamics = images.shape[-3]
+            images_for_csm = images.sum(axis=-3)
+        else:
+            images_for_csm = images
 
         # generate window function for blurring image data
-        win = self.window2(images.shape[-2:], windowpct=taper, widthpct=width)
+        win = self.window2(images_for_csm.shape[-2:], windowpct=taper, widthpct=width)
 
         # apply kspace filter
-        kspace = self.loop2(self.fft2, images, dir=1)
+        kspace = self.loop2(self.fft2, images_for_csm, dir=1)
         kspace *= win
 
         # transform back into image space and normalize
@@ -419,8 +450,17 @@ class ExternalNode(gpi.NodeAPI):
         # zero out points that are below the mask threshold
         thresh = mask_floor/100.0 * rms.max()
         csm *= rms > thresh
+        
+        # Dynamic data - average all dynamics for csm - asign the average to all dynamics
+        if ( (images.ndim > 3) and (average_csm) ):
+            out = np.zeros(images.shape, np.complex64)
+            for coil in range(images.shape[-4]):
+                for dyn in range(nr_dynamics):
+                    out[coil,dyn,:,:] = csm[coil,:,:]
+        else:
+            out=csm
 
-        return csm
+        return out
 
     def window2(self, shape, windowpct=100.0, widthpct=100.0, stopVal=0, passVal=1):
         # 2D hanning window just like shapes
