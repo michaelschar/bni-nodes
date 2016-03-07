@@ -127,9 +127,6 @@ class ExternalNode(gpi.NodeAPI):
         else:
             mtx_min = 0
             mtx_max = mtx
-        self.log.debug(mtx_min)
-        self.log.debug(mtx_max)
-        
         
         # output including all iterations
         x_iterations = np.zeros([iterations,mtx_original,mtx_original],dtype=np.complex64)
@@ -154,7 +151,7 @@ class ExternalNode(gpi.NodeAPI):
         else:
             # make sure input csm are the same mtx size
             csm = self.pad2(csm, mtx)
-        self.setData('Autocalibrated CSM', csm)
+        self.setData('Autocalibrated CSM', csm[:,mtx_min:mtx_max,mtx_min:mtx_max])
 
         # keep a conjugate csm set on hand
         csm_conj = np.conj(csm)
@@ -238,9 +235,9 @@ class ExternalNode(gpi.NodeAPI):
             x_iterations[i+1,:,:] = x_last[mtx_min:mtx_max,mtx_min:mtx_max]
 
         # return the final image     
-        self.setData('d', d_last)
-        self.setData('r', r_last)
-        self.setData('x', x_last)
+        self.setData('d', d_last[mtx_min:mtx_max,mtx_min:mtx_max])
+        self.setData('r', r_last[mtx_min:mtx_max,mtx_min:mtx_max])
+        self.setData('x', x_last[mtx_min:mtx_max,mtx_min:mtx_max])
         self.setData('x iterations', x_iterations)
 
         return 0
