@@ -72,7 +72,6 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('Slider', 'Autocalibration Taper (%)', val=50, min=0, max=100)
         self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
         self.addWidget('PushButton', 'Dynamic data - average all dynamics for csm', toggle=True, button_title='ON', val=1)
-        self.addWidget('PushButton', 'New', toggle=True, button_title='ON', val=1)
 
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=[np.complex64, np.complex128])
@@ -157,7 +156,6 @@ class ExternalNode(gpi.NodeAPI):
         iterations = self.getVal('iterations')
         step = self.getVal('step')
         oversampling_ratio = self.getVal('oversampling ratio')
-        new = self.getVal('New')
         
         # for a single iteration step use the csm stored in the out port
         if step and (self.getData('Applied CSM') is not None):
@@ -167,334 +165,185 @@ class ExternalNode(gpi.NodeAPI):
         if csm is not None:
             csm = csm.astype(np.complex64, copy=False)
         
-        if new:
-            # oversampling: Oversample at the beginning and crop at the end
-            mtx = np.int(mtx_original * oversampling_ratio)
-            if mtx%2:
-                mtx+=1
-            if oversampling_ratio > 1:
-                mtx_min = np.int((mtx-mtx_original)/2)
-                mtx_max = mtx_min + mtx_original
-            else:
-                mtx_min = 0
-                mtx_max = mtx
-                    
-            # data dimensions
-            nr_points = data.shape[-1]
-            nr_arms = data.shape[-2]
-            nr_coils = data.shape[0]
-            if data.ndim == 3:
-                extra_dim1 = 1
-                extra_dim2 = 1
-                data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
-            elif data.ndim == 4:
-                extra_dim1 = data.shape[-3]
-                extra_dim2 = 1
-                data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
-            elif data.ndim == 5:
-                extra_dim1 = data.shape[-3]
-                extra_dim2 = data.shape[-4]
-            elif data.ndim > 5:
-                self.log.warn("Not implemented yet")
-            out_dims_grid = [nr_coils, extra_dim2, extra_dim1, mtx, nr_arms, nr_points]
-            out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
-            out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
-            iterations_shape = [extra_dim2, extra_dim1, mtx, mtx]
-
-            # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
-            if coords.ndim == 3:
-                coords.shape = [1,nr_arms,nr_points,2]
-
-            # output including all iterations
-            x_iterations = np.zeros([iterations,extra_dim2,extra_dim1,mtx_original,mtx_original],dtype=np.complex64)
-            if step and (iterations > 1):
-                previous_iterations = self.getData('x iterations')
-                previous_iterations.shape = [iterations-1,extra_dim2, extra_dim1, mtx_original, mtx_original]
-                x_iterations[:-1,:,:,:,:] = previous_iterations
-
-            # pre-calculate Kaiser-Bessel kernel
-            self.log.debug("Calculate kernel")
-            kernel_table_size = 800
-            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
-            
-            # pre-calculate the rolloff for the spatial domain
-            roll = self.rolloff2(mtx, kernel)
-
-            # for a single iteration step use the applied csm and intermediate results stored in outports
-            if step and (self.getData('d') is not None):
-                # zero-pad csm to oversampled matrix size
-                if oversampling_ratio > 1:
-                    csm = np.pad(csm,[(0,0),(0,0),(0,0),(mtx_min,mtx-mtx_max),(mtx_min,mtx-mtx_max)], 'constant', constant_values=(0,0))
-            else: # this is the normal path (not single iteration step)
-                # grid to create images that are corrupted by
-                # aliasing due to undersampling.  If the k-space data have an
-                # auto-calibration region, then this can be used to generate B1 maps.
-                self.log.debug("Grid undersampled data")
-                gridded_kspace = self.grid2D(data, coords, weights, kernel, out_dims_grid)
-                # FFT
-                image_domain = self.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
-                # rolloff
-                image_domain *= roll
-
-                # calculate auto-calibration B1 maps
-                if csm is None:
-                    self.log.debug("Generating autocalibrated B1 maps...")
-                    csm = self.autocalibrationB1Maps2D(image_domain)
-                else:
-                    # make sure input csm and data are the same mtx size.
-                    # Assuming the FOV was the same: zero-fill in k-space
-                    if csm.ndim != 5:
-                        self.log.debug("Reshape imported csm")
-                        csm.shape = [nr_coils,extra_dim2,extra_dim1,csm.shape[-2],csm.shape[-1]]
-                    if csm.shape[-1] != mtx:
-                        self.log.debug("Interpolate csm to oversampled matrix size")
-                        csm_oversampled_mtx = np.int(csm.shape[-1] * oversampling_ratio)
-                        if csm_oversampled_mtx%2:
-                            csm_oversampled_mtx+=1
-                        out_dims_oversampled_image_domain = [nr_coils, extra_dim2, extra_dim1, csm_oversampled_mtx, csm_oversampled_mtx]
-                        csm = self.fft2D(csm, dir=1, out_dims_fft=out_dims_oversampled_image_domain)
-                        csm = self.fft2D(csm, dir=0, out_dims_fft=out_dims_fft)
-                self.setData('Applied CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
-
-            # keep a conjugate csm set on hand
-            csm_conj = np.conj(csm)
-
-            ## Iteration 1:
-            if step and (self.getData('d') is not None):
-                self.log.debug("\tSENSE Iteration: " + str(iterations))
-                # make sure the loop doesn't start if only one step is needed
-                iterations = 0
-
-                # Get the data from the last execution of this node for an
-                # additional single iteration.
-                d = self.getData('d').copy()
-                r = self.getData('r').copy()
-                x = self.getData('x').copy()
-
-                # A
-                Ad = csm * d # add coil phase
-                Ad *= roll # pre-rolloff for degrid convolution
-                Ad = self.fft2D(Ad, dir=1)
-                Ad = self.degrid2D(Ad, coords, kernel, out_dims_degrid)
-                Ad = self.grid2D(Ad, coords, weights, kernel, out_dims_grid)
-                Ad = self.fft2D(Ad, dir=0)
-                Ad *= roll
-                Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-                Ad = Ad.sum(axis=0) # assume the coil dim is the first
-            else:
-                self.log.debug("\tSENSE Iteration: 1")
-                # calculate initial conditions
-                # d_0
-                d_0 = csm_conj * image_domain # broadcast multiply to remove coil phase
-                d_0 = d_0.sum(axis=0) # assume the coil dim is the first
-
-                # Ad_0:
-                #   degrid -> grid (loop over coils)
-                Ad_0 = csm * d_0 # add coil phase
-                Ad_0 *= roll # pre-rolloff for degrid convolution
-                Ad_0 = self.fft2D(Ad_0, dir=1)
-                Ad_0 = self.degrid2D(Ad_0, coords, kernel, out_dims_degrid)
-                Ad_0 = self.grid2D(Ad_0, coords, weights, kernel, out_dims_grid)
-                Ad_0 = self.fft2D(Ad_0, dir=0)
-                Ad_0 *= roll
-                Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
-                Ad_0 = Ad_0.sum(axis=0) # assume the coil dim is the first
-                
-                # use the initial conditions for the first iter
-                r = d = d_0
-                x = np.zeros_like(d)
-                Ad = Ad_0
-
-            # CG - iter 1
-            d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-            
-            current_iteration = x_last
-            current_iteration.shape = iterations_shape
-            if step:
-                x_iterations[-1,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
-            else:
-                x_iterations[0,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
-
-            ## Iterations >1:
-            for i in range(iterations-1):
-                self.log.debug("\tSENSE Iteration: " + str(i+2))
-
-                # input the result of the last iter
-                d = d_last
-                r = r_last
-                x = x_last
-
-                # A
-                Ad = csm * d # add coil phase
-                Ad *= roll # pre-rolloff for degrid convolution
-                Ad = self.fft2D(Ad, dir=1)
-                Ad = self.degrid2D(Ad, coords, kernel, out_dims_degrid)
-                Ad = self.grid2D(Ad, coords, weights, kernel, out_dims_grid)
-                Ad = self.fft2D(Ad, dir=0)
-                Ad *= roll
-                Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-                Ad = Ad.sum(axis=0) # assume the coil dim is the first
-                # CG
-                d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-
-                current_iteration = x_last
-                current_iteration.shape = iterations_shape
-                x_iterations[i+1,:,:,:,:] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
-
-            # return the final image     
-            self.setData('d', d_last)
-            self.setData('r', r_last)
-            self.setData('x', x_last)
-            self.setData('out', np.squeeze(current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]))
-            self.setData('x iterations', np.squeeze(x_iterations))
-
+        # oversampling: Oversample at the beginning and crop at the end
+        mtx = np.int(mtx_original * oversampling_ratio)
+        if mtx%2:
+            mtx+=1
+        if oversampling_ratio > 1:
+            mtx_min = np.int((mtx-mtx_original)/2)
+            mtx_max = mtx_min + mtx_original
         else:
+            mtx_min = 0
+            mtx_max = mtx
+                
+        # data dimensions
+        nr_points = data.shape[-1]
+        nr_arms = data.shape[-2]
+        nr_coils = data.shape[0]
+        if data.ndim == 3:
+            extra_dim1 = 1
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
+        elif data.ndim == 4:
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
+        elif data.ndim == 5:
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = data.shape[-4]
+        elif data.ndim > 5:
+            self.log.warn("Not implemented yet")
+        out_dims_grid = [nr_coils, extra_dim2, extra_dim1, mtx, nr_arms, nr_points]
+        out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
+        out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
+        iterations_shape = [extra_dim2, extra_dim1, mtx, mtx]
+
+        # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
+        if coords.ndim == 3:
+            coords.shape = [1,nr_arms,nr_points,2]
+
+        # output including all iterations
+        x_iterations = np.zeros([iterations,extra_dim2,extra_dim1,mtx_original,mtx_original],dtype=np.complex64)
+        if step and (iterations > 1):
+            previous_iterations = self.getData('x iterations')
+            previous_iterations.shape = [iterations-1,extra_dim2, extra_dim1, mtx_original, mtx_original]
+            x_iterations[:-1,:,:,:,:] = previous_iterations
+
+        # pre-calculate Kaiser-Bessel kernel
+        self.log.debug("Calculate kernel")
+        kernel_table_size = 800
+        kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         
-            # breaking the beauty of the loop2 function, but I'm wasting too much time here..
-            if data.ndim == 3:
-                nr_slices_or_dynamics = 1
-            elif data.ndim == 4:
-                nr_slices_or_dynamics = data.shape[-3]
-            elif data.ndim > 4:
-                self.log.warn("Not properly implemented")
-            
-            # oversampling: Oversample at the beginning and crop at the end
-            mtx = np.int(mtx_original * oversampling_ratio)
-            if mtx%2:
-                mtx+=1
+        # pre-calculate the rolloff for the spatial domain
+        roll = self.rolloff2(mtx, kernel)
+
+        # for a single iteration step use the applied csm and intermediate results stored in outports
+        if step and (self.getData('d') is not None):
+            # zero-pad csm to oversampled matrix size
             if oversampling_ratio > 1:
-                mtx_min = np.int((mtx-mtx_original)/2)
-                mtx_max = mtx_min + mtx_original
-            else:
-                mtx_min = 0
-                mtx_max = mtx
-            
-            # output including all iterations
-            x_iterations = np.zeros([iterations,nr_slices_or_dynamics,mtx_original,mtx_original],dtype=np.complex64)
-            if step and (iterations > 1):
-                x_iterations[:-1,:,:] = self.getData('x iterations')
-
-            # pre-calculate Kaiser-Bessel kernel
-            kernel_table_size = 800
-            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
-            # pre-calculate the rolloff for the spatial domain
-            roll = self.rolloff2(mtx, kernel)
-
-            # grid (loop over coils) to create images that are corrupted by
+                csm = np.pad(csm,[(0,0),(0,0),(0,0),(mtx_min,mtx-mtx_max),(mtx_min,mtx-mtx_max)], 'constant', constant_values=(0,0))
+        else: # this is the normal path (not single iteration step)
+            # grid to create images that are corrupted by
             # aliasing due to undersampling.  If the k-space data have an
             # auto-calibration region, then this can be used to generate B1 maps.
-            images = self.loop2(self.grid2, data, mtx, coords, weights, kernel)
-            images = self.loop2(self.fft2, images, dir=0)
-            images *= roll
+            self.log.debug("Grid undersampled data")
+            gridded_kspace = self.grid2D(data, coords, weights, kernel, out_dims_grid)
+            # FFT
+            image_domain = self.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
+            # rolloff
+            image_domain *= roll
 
             # calculate auto-calibration B1 maps
             if csm is None:
-                print('\tGenerating autocalibrated B1 maps...')
-                csm = self.autocalibrationB1Maps(images)
+                self.log.debug("Generating autocalibrated B1 maps...")
+                csm = self.autocalibrationB1Maps2D(image_domain)
             else:
-                # make sure input csm are the same mtx size
-                csm = self.pad2(csm, mtx)
-            if nr_slices_or_dynamics == 1:
-                csm_out = csm[:,mtx_min:mtx_max,mtx_min:mtx_max]
-            else:
-                csm_out = csm[:,:,mtx_min:mtx_max,mtx_min:mtx_max]
-            self.setData('Applied CSM', csm_out)
+                # make sure input csm and data are the same mtx size.
+                # Assuming the FOV was the same: zero-fill in k-space
+                if csm.ndim != 5:
+                    self.log.debug("Reshape imported csm")
+                    csm.shape = [nr_coils,extra_dim2,extra_dim1,csm.shape[-2],csm.shape[-1]]
+                if csm.shape[-1] != mtx:
+                    self.log.debug("Interpolate csm to oversampled matrix size")
+                    csm_oversampled_mtx = np.int(csm.shape[-1] * oversampling_ratio)
+                    if csm_oversampled_mtx%2:
+                        csm_oversampled_mtx+=1
+                    out_dims_oversampled_image_domain = [nr_coils, extra_dim2, extra_dim1, csm_oversampled_mtx, csm_oversampled_mtx]
+                    csm = self.fft2D(csm, dir=1, out_dims_fft=out_dims_oversampled_image_domain)
+                    csm = self.fft2D(csm, dir=0, out_dims_fft=out_dims_fft)
+            self.setData('Applied CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
 
-            # keep a conjugate csm set on hand
-            csm_conj = np.conj(csm)
+        # keep a conjugate csm set on hand
+        csm_conj = np.conj(csm)
 
-            ## Iteration 1:
-            if step and (self.getData('d') is not None):
-                print('\tSENSE Iteration: ', iterations)
-                # make sure the loop doesn't start if only one step is needed
-                iterations = 0
+        ## Iteration 1:
+        if step and (self.getData('d') is not None):
+            self.log.debug("\tSENSE Iteration: " + str(iterations))
+            # make sure the loop doesn't start if only one step is needed
+            iterations = 0
 
-                # Get the data from the last execution of this node for an
-                # additional single iteration.
-                d = self.getData('d').copy()
-                r = self.getData('r').copy()
-                x = self.getData('x').copy()
+            # Get the data from the last execution of this node for an
+            # additional single iteration.
+            d = self.getData('d').copy()
+            r = self.getData('r').copy()
+            x = self.getData('x').copy()
 
-                # A
-                Ad = csm * d # add coil phase
-                Ad *= roll # pre-rolloff for degrid convolution
-                Ad = self.loop2(self.fft2, Ad, dir=1)
-                Ad = self.loop2(self.degrid2, Ad, coords, kernel)
-                Ad = self.loop2(self.grid2, Ad, mtx, coords, weights, kernel)
-                Ad = self.loop2(self.fft2, Ad, dir=0)
-                Ad *= roll
-                Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-                Ad = Ad.sum(axis=0) # assume the coil dim is the first
+            # A
+            Ad = csm * d # add coil phase
+            Ad *= roll # pre-rolloff for degrid convolution
+            Ad = self.fft2D(Ad, dir=1)
+            Ad = self.degrid2D(Ad, coords, kernel, out_dims_degrid)
+            Ad = self.grid2D(Ad, coords, weights, kernel, out_dims_grid)
+            Ad = self.fft2D(Ad, dir=0)
+            Ad *= roll
+            Ad = csm_conj * Ad # broadcast multiply to remove coil phase
+            Ad = Ad.sum(axis=0) # assume the coil dim is the first
+        else:
+            self.log.debug("\tSENSE Iteration: 1")
+            # calculate initial conditions
+            # d_0
+            d_0 = csm_conj * image_domain # broadcast multiply to remove coil phase
+            d_0 = d_0.sum(axis=0) # assume the coil dim is the first
 
-            else:
-                print('\tSENSE Iteration: ', 1)
-                # calculate initial conditions
-                # d_0
-                d_0 = csm_conj * images # broadcast multiply to remove coil phase
-                d_0 = d_0.sum(axis=0) # assume the coil dim is the first
-
-                # Ad_0:
-                #   degrid -> grid (loop over coils)
-                Ad_0 = csm * d_0 # add coil phase
-                Ad_0 *= roll # pre-rolloff for degrid convolution
-                Ad_0 = self.loop2(self.fft2, Ad_0, dir=1)
-                Ad_0 = self.loop2(self.degrid2, Ad_0, coords, kernel)
-                Ad_0 = self.loop2(self.grid2, Ad_0, mtx, coords, weights, kernel)
-                Ad_0 = self.loop2(self.fft2, Ad_0, dir=0)
-                Ad_0 *= roll
-                Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
-                Ad_0 = Ad_0.sum(axis=0) # assume the coil dim is the first
-
-                # use the initial conditions for the first iter
-                r = d = d_0
-                x = np.zeros_like(d)
-                Ad = Ad_0
-
-
-            # CG - iter 1
-            d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
+            # Ad_0:
+            #   degrid -> grid (loop over coils)
+            Ad_0 = csm * d_0 # add coil phase
+            Ad_0 *= roll # pre-rolloff for degrid convolution
+            Ad_0 = self.fft2D(Ad_0, dir=1)
+            Ad_0 = self.degrid2D(Ad_0, coords, kernel, out_dims_degrid)
+            Ad_0 = self.grid2D(Ad_0, coords, weights, kernel, out_dims_grid)
+            Ad_0 = self.fft2D(Ad_0, dir=0)
+            Ad_0 *= roll
+            Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
+            Ad_0 = Ad_0.sum(axis=0) # assume the coil dim is the first
             
+            # use the initial conditions for the first iter
+            r = d = d_0
+            x = np.zeros_like(d)
+            Ad = Ad_0
+
+        # CG - iter 1
+        d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
+        
+        current_iteration = x_last
+        current_iteration.shape = iterations_shape
+        if step:
+            x_iterations[-1,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
+        else:
+            x_iterations[0,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
+
+        ## Iterations >1:
+        for i in range(iterations-1):
+            self.log.debug("\tSENSE Iteration: " + str(i+2))
+
+            # input the result of the last iter
+            d = d_last
+            r = r_last
+            x = x_last
+
+            # A
+            Ad = csm * d # add coil phase
+            Ad *= roll # pre-rolloff for degrid convolution
+            Ad = self.fft2D(Ad, dir=1)
+            Ad = self.degrid2D(Ad, coords, kernel, out_dims_degrid)
+            Ad = self.grid2D(Ad, coords, weights, kernel, out_dims_grid)
+            Ad = self.fft2D(Ad, dir=0)
+            Ad *= roll
+            Ad = csm_conj * Ad # broadcast multiply to remove coil phase
+            Ad = Ad.sum(axis=0) # assume the coil dim is the first
+            # CG
+            d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
+
             current_iteration = x_last
-            current_iteration.shape = [nr_slices_or_dynamics,mtx,mtx]
-            if step:
-                x_iterations[-1,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
-            else:
-                x_iterations[0,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
+            current_iteration.shape = iterations_shape
+            x_iterations[i+1,:,:,:,:] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
 
-            ## Iterations >1:
-            for i in range(iterations-1):
-                print('\tSENSE Iteration: ', i+2)
-
-                # input the result of the last iter
-                d = d_last
-                r = r_last
-                x = x_last
-
-                # A
-                Ad = csm * d # add coil phase
-                Ad *= roll # pre-rolloff for degrid convolution
-                Ad = self.loop2(self.fft2, Ad, dir=1)
-                Ad = self.loop2(self.degrid2, Ad, coords, kernel)
-                Ad = self.loop2(self.grid2, Ad, mtx, coords, weights, kernel)
-                Ad = self.loop2(self.fft2, Ad, dir=0)
-                Ad *= roll
-
-                Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-                Ad = Ad.sum(axis=0) # assume the coil dim is the first
-
-                # CG
-                d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-
-                current_iteration = x_last
-                current_iteration.shape = [nr_slices_or_dynamics,mtx,mtx]
-                x_iterations[i+1,:,:,:] = current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]
-
-            # return the final image     
-            self.setData('d', d_last)
-            self.setData('r', r_last)
-            self.setData('x', x_last)
-            self.setData('out', np.squeeze(current_iteration[:,mtx_min:mtx_max,mtx_min:mtx_max]))
-            self.setData('x iterations', np.squeeze(x_iterations))
+        # return the final image     
+        self.setData('d', d_last)
+        self.setData('r', r_last)
+        self.setData('x', x_last)
+        self.setData('out', np.squeeze(current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]))
+        self.setData('x iterations', np.squeeze(x_iterations))
 
         return 0
 
