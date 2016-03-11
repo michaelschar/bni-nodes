@@ -54,9 +54,7 @@ class ExternalNode(gpi.NodeAPI):
     def initUI(self):
         # Widgets
         self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
-        self.addWidget('PushButton', 'New', toggle=True, button_title='ON', val=1)
         
-
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=np.complex64, obligation=gpi.REQUIRED)
         self.addInPort('coords', 'NPYarray', dtype=[np.float64, np.float32], obligation=gpi.REQUIRED)
@@ -71,7 +69,6 @@ class ExternalNode(gpi.NodeAPI):
         coords = self.getData('coords').astype(np.float32, copy=False)
         data = self.getData('data').astype(np.complex64, copy=False)
         oversampling_ratio = self.getVal('oversampling ratio')
-        new = self.getVal('New')
         
         # Determine matrix size before and after oversampling
         mtx_original = data.shape[-1]
@@ -85,70 +82,46 @@ class ExternalNode(gpi.NodeAPI):
             mtx_min = 0
             mtx_max = mtx
         
-        if new:
         # data dimensions
-            nr_points = coords.shape[-2]
-            nr_arms = coords.shape[-3]
-            nr_coils = data.shape[0]
-            if data.ndim == 3:
-                extra_dim1 = 1
-                extra_dim2 = 1
-                data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
-            elif data.ndim == 4:
-                extra_dim1 = data.shape[-3]
-                extra_dim2 = 1
-                data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
-            elif data.ndim == 5:
-                extra_dim1 = data.shape[-3]
-                extra_dim2 = data.shape[-4]
-            elif data.ndim > 5:
-                self.log.warn("Not implemented yet")
-            out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
-            out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
-            
-            # pre-calculate Kaiser-Bessel kernel
-            kernel_table_size = 800
-            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
-            
-            # pre-calculate the rolloff for the spatial domain
-            roll = self.rolloff2(mtx, kernel)
+        nr_points = coords.shape[-2]
+        nr_arms = coords.shape[-3]
+        nr_coils = data.shape[0]
+        if data.ndim == 3:
+            extra_dim1 = 1
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+        elif data.ndim == 4:
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+        elif data.ndim == 5:
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = data.shape[-4]
+        elif data.ndim > 5:
+            self.log.warn("Not implemented yet")
+        out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
+        out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
 
-            # perform rolloff correction
-            rolloff_corrected_data = data * roll[mtx_min:mtx_max,mtx_min:mtx_max]
+        # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
+        if coords.ndim == 3:
+            coords.shape = [1,nr_arms,nr_points,2]
+
+        # pre-calculate Kaiser-Bessel kernel
+        kernel_table_size = 800
+        kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         
-            # inverse-FFT with zero-interpolation to oversampled k-space
-            oversampled_kspace = self.fft2D(rolloff_corrected_data, dir=1, out_dims=out_dims_fft)
-       
-            out = self.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid)
-            self.setData('out', out.squeeze())
-        else:
-        
-            # assume the last dims (i.e. each image) must be degridded independently
-            data_iter, iter_shape = self.pinch(data, stop=-2)
-            if iter_shape == []:
-                iter_shape = [1]
+        # pre-calculate the rolloff for the spatial domain
+        roll = self.rolloff2(mtx, kernel)
 
-            # construct an output array w/ slice dims
-            out_shape = iter_shape + list(coords.shape)[:-1]
-            out = np.zeros(out_shape, dtype=data.dtype)
-            out_iter,_ = self.pinch(out, stop=-2)
-            
-            # pre-calculate Kaiser-Bessel kernel
-            kernel_table_size = 800
-            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
-            
-            # pre-calculate the rolloff for the spatial domain
-            roll = self.rolloff2(mtx, kernel)
-
-            # degrid all slices
-            for i in range(np.prod(iter_shape)):
-                oversampled_kspace = roll[mtx_min:mtx_max,mtx_min:mtx_max]*data_iter[i]
-                oversampled_kspace = self.fft2(oversampled_kspace, dir=1, out_shape=[mtx, mtx])
-                out_iter[i] = dg.degrid(coords, oversampled_kspace, kernel)
-
-            # reset array shapes and output
-            self.setData('out', out.squeeze())
-
+        # perform rolloff correction
+        rolloff_corrected_data = data * roll[mtx_min:mtx_max,mtx_min:mtx_max]
+    
+        # inverse-FFT with zero-interpolation to oversampled k-space
+        oversampled_kspace = self.fft2D(rolloff_corrected_data, dir=1, out_dims=out_dims_fft)
+   
+        out = self.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid)
+        self.setData('out', out.squeeze())
+ 
         return(0)
 
     def execType(self):
