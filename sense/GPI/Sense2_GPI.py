@@ -203,6 +203,7 @@ class ExternalNode(gpi.NodeAPI):
         # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
         if coords.ndim == 3:
             coords.shape = [1,nr_arms,nr_points,2]
+            weights.shape = [1,nr_arms,nr_points]
 
         # output including all iterations
         x_iterations = np.zeros([iterations,extra_dim2,extra_dim1,mtx_original,mtx_original],dtype=np.complex64)

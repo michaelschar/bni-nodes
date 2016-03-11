@@ -128,7 +128,7 @@ def grid2D(data, coords, weights, kernel, out_dims):
             extra1_coords = extra1
         for extra2 in range(extra_dim2):
             for coil in range(nr_coils):
-                gridded_kspace[coil,extra2,extra1,:,:] = bni_grid.grid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], weights, kernel, outdim, dx, dy)
+                gridded_kspace[coil,extra2,extra1,:,:] = bni_grid.grid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], weights[extra1_coords,:,:], kernel, outdim, dx, dy)
 
     return gridded_kspace
 
