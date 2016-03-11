@@ -27,6 +27,8 @@ class ExternalNode(gpi.NodeAPI):
     # initialize the UI - add widgets and input/output ports
     def initUI(self):
         # Widgets
+        self.addWidget('SpinBox','Eff MTX XY', min=5, val=240)
+        self.addWidget('SpinBox','Eff MTX Z',  min=5, val=240)
         self.addWidget('DoubleSpinBox', 'dx (pixels)', val=0)
         self.addWidget('DoubleSpinBox', 'dy (pixels)', val=0)
         self.addWidget('DoubleSpinBox', 'dz (pixels)', val=0)
@@ -49,12 +51,13 @@ class ExternalNode(gpi.NodeAPI):
         inparam = self.getData('params_in')
 
         if crds.shape[-1] == 3:
-            self.log.debug("*** Gabri *** 3D data")                                                       
+            self.log.node("*** 3D data")                                                       
         else:
             self.setAttr('dz (pixels)', visible=False)
-            self.log.debug("*** Gabri *** 2D data")
+            self.setAttr('Eff MTX Z', visible=False)
+            self.log.node("*** 2D data")
 
-        # if dict given as input compute dx,dy,dz (as in Grid_GPI.py) 
+        # GB: if dict given as input compute dx,dy,dz (as in Grid_GPI.py) 
         if (inparam is not None):                                               
 
           # header check
@@ -72,14 +75,15 @@ class ExternalNode(gpi.NodeAPI):
 
           # Auto Matrix calculation: extra 25% assumes "true resolution"          
           mtx_xy = 1.25*float(inparam['spFOVXY'][0])/float(inparam['spRESXY'][0])
-          self.log.debug("*** Gabri *** Eff MTX XY "+str(mtx_xy))        
-#          self.setAttr('Eff MTX XY', val = mtx_xy)                   
+          self.setAttr('Eff MTX XY', val = mtx_xy)                   
+          self.log.node("*** Eff MTX XY "+str(mtx_xy))        
+
           if crds.shape[-1] == 3:                                               
             mtx_z  = float(inparam['spFOVZ'][0]) /float(inparam['spRESZ'][0])   
             if int(float(inparam['spSTYPE'][0])) in [2,3]: #SDST, FLORET        
               mtx_z *= 1.25
-            self.log.debug("*** Gabri *** Eff MTX Z "+str(mtx_z))                                                         
-#            self.setAttr('Eff MTX Z', val = mtx_z)                   
+            self.setAttr('Eff MTX Z', val = mtx_z)                   
+            self.log.node("*** Eff MTX Z "+str(mtx_z))                                                         
 
           # Auto offset calculation.  Values reported in mm, change to # pixels
           m_off = 0.001*float(inparam['m_offc'][0])
@@ -88,7 +92,8 @@ class ExternalNode(gpi.NodeAPI):
           yoff = p_off*float(mtx_xy)/float(inparam['spFOVXY'][0])
           self.setAttr('dx (pixels)', val=xoff)
           self.setAttr('dy (pixels)', val=yoff)
-          self.log.debug("*** Gabri *** Computed off-centers dx="+str(xoff)+" dy="+str(yoff))   
+          self.log.node("*** Computed off-centers dx="+str(xoff)+" dy="+str(yoff))  
+ 
           if crds.shape[-1] == 3:                                               
             s_off = 0.001*float(inparam['s_offc'][0])
             zoff = s_off*float(mtx_z) /float(inparam['spFOVZ'][0])
@@ -98,17 +103,17 @@ class ExternalNode(gpi.NodeAPI):
               (int(mtx_z)%2 == 0):
               zoff = zoff - 0.5
             self.setAttr('dz (pixels)', val=zoff)
-            self.log.debug("*** Gabri *** Computed off-center dz="+str(zoff))   
+            self.log.node("*** Computed off-center dz="+str(zoff))   
  
         dx = self.getVal('dx (pixels)')
         dy = self.getVal('dy (pixels)')
         if crds.shape[-1] == 3:
             dz = self.getVal('dz (pixels)')
             phase = np.exp(-1j * 2.0 * np.pi * (crds[...,0]*dx + crds[...,1]*dy + crds[...,2]*dz))
-            self.log.debug("*** Gabri *** Computed 3D phase shift")   
+            self.log.node("*** Computed 3D phase shift")   
         else:
             phase = np.exp(-1j * 2.0 * np.pi * (crds[...,0]*dx + crds[...,1]*dy))
-            self.log.debug("*** Gabri *** Computed 2D phase shift")   
+            self.log.node("*** Computed 2D phase shift")   
 
         self.setData('adjusted data', data * phase)
 
