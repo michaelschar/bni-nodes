@@ -215,7 +215,7 @@ class ExternalNode(gpi.NodeAPI):
         kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         
         # pre-calculate the rolloff for the spatial domain
-        roll = self.rolloff2(mtx, kernel)
+        roll = self.rolloff2D(mtx, kernel)
 
         # for a single iteration step use the applied csm and intermediate results stored in outports
         if step and (self.getData('d') is not None):
@@ -378,164 +378,10 @@ class ExternalNode(gpi.NodeAPI):
 
         return (d_out, r_out, x_out)
 
-    def loop2(self, func, data, *args, **kwargs):
-        # Loop over the extra dimensions of the data, append the output
-        # of func to the final output for each of the looped dimensions.
-        # 'data' must be the first arg to func.
-        # 'func' must return one numpy array
-        import numpy as np
-
-        # concatenate all dims to be looped on
-        orig_shape = list(data.shape)
-        loop_dims = orig_shape[0:-2]
-        loops = np.prod(loop_dims)
-        loop_shape = [loops] + orig_shape[-2:]
-        data.shape = loop_shape
-
-        outdata = None
-        for i in range(int(loops)):
-            fresult = func(data[i], *args, **kwargs)
-            fresult = np.expand_dims(fresult, 0) # add a dim for appending to
-            if i == 0:
-                outdata = fresult.copy()
-            else:
-                outdata = np.append(outdata, fresult, axis=0)
-
-        # reset input shape
-        data.shape = orig_shape
-
-        # replace loop dims with original dims
-        outdata.shape = loop_dims + list(outdata.shape)[-2:]
-
-        return outdata
-
-    def pad2(self, img, mtx):
-        out_shape = list(img.shape)
-        out_shape[-1] = mtx
-        out_shape[-2] = mtx
-        return self.fft2(img, out_shape=out_shape, tx_ON=False)
-
-    def fft2(self, data, dir=0, zp=1, out_shape=[], tx_ON=True):
-        # data: np.complex64
-        # dir: int (0 or 1)
-        # zp: float (>1)
-
-        # simplify the fftw wrapper
-        import numpy as np
-        import core.math.fft as corefft
-
-        # generate output dim size array
-        # fortran dimension ordering
-        outdims = list(data.shape)
-        if len(out_shape):
-            outdims = out_shape
-        else:
-            for i in range(len(outdims)):
-                outdims[i] = int(outdims[i]*zp)
-        outdims.reverse()
-        outdims = np.array(outdims, dtype=np.int64)
-
-        # load fft arguments
-        kwargs = {}
-        kwargs['dir'] = dir
-
-        # transform or just zeropad
-        if tx_ON:
-            kwargs['dim1'] = 1
-            kwargs['dim2'] = 1
-        else:
-            kwargs['dim1'] = 0
-            kwargs['dim2'] = 0
-
-        return corefft.fftw(data, outdims, **kwargs)
-
-    def rolloff2(self, mtx_xy, kernel, clamp_min_percent=10):
-        # mtx_xy: int
-        import numpy as np
-        import bni.gridding.grid_kaiser as gd
-
-        # grid one point at k_0
-        dx = dy = 0.0
-        coords = np.array([0,0], dtype='float32')
-        data = np.array([1.0], dtype='complex64')
-        weights = np.array([1.0], dtype='float32')
-        outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
-
-        # grid -> fft -> |x|
-        out = np.abs(self.fft2(gd.grid(coords, data, weights, kernel, outdim, dx, dy)))
-
-        # clamp the lowest values to a percentage of the max
-        clamp = out.max() * clamp_min_percent/100.0
-        out[out < clamp] = clamp
-
-        # invert
-        return 1.0/out
-
-    def grid2(self, data, mtx_xy, coords, weights, kernel):
-        # mtx_xy: int
-        # coords: np.float32
-        # data: np.complex64
-        # weights: np.float32
-
-        # check dims
-        assert list(data.shape) == list(coords.shape)[:-1]
-        assert list(data.shape) == list(weights.shape)
-
-        import numpy as np
-        import bni.gridding.grid_kaiser as gd
-        dx = dy = 0.0
-        outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
-        return gd.grid(coords, data, weights, kernel, outdim, dx, dy)
-
-    def degrid2(self, gridded_data, coords, kernel):
-        import bni.gridding.grid_kaiser as dg
-        return dg.degrid(coords, gridded_data, kernel)
-
     def execType(self):
         # numpy linalg fails if this isn't a thread :(
         #return gpi.GPI_THREAD
         return gpi.GPI_PROCESS
-
-    def autocalibrationB1Maps(self, images):
-        # get UI params
-        taper = self.getVal('Autocalibration Taper (%)')
-        width = self.getVal('Autocalibration Width (%)')
-        mask_floor = self.getVal('Mask Floor (% of max mag)')
-        average_csm = self.getVal('Dynamic data - average all dynamics for csm')
-        
-        # Dynamic data - average all dynamics for csm
-        if ( (images.ndim > 3) and (average_csm) ):
-            nr_dynamics = images.shape[-3]
-            images_for_csm = images.sum(axis=-3)
-        else:
-            images_for_csm = images
-
-        # generate window function for blurring image data
-        win = self.window2(images_for_csm.shape[-2:], windowpct=taper, widthpct=width)
-
-        # apply kspace filter
-        kspace = self.loop2(self.fft2, images_for_csm, dir=1)
-        kspace *= win
-
-        # transform back into image space and normalize
-        csm = self.loop2(self.fft2, kspace, dir=0)
-        rms = np.sqrt(np.sum(np.abs(csm)**2, axis=0))
-        csm = csm / rms
-
-        # zero out points that are below the mask threshold
-        thresh = mask_floor/100.0 * rms.max()
-        csm *= rms > thresh
-        
-        # Dynamic data - average all dynamics for csm - asign the average to all dynamics
-        if ( (images.ndim > 3) and (average_csm) ):
-            out = np.zeros(images.shape, np.complex64)
-            for coil in range(images.shape[-4]):
-                for dyn in range(nr_dynamics):
-                    out[coil,dyn,:,:] = csm[coil,:,:]
-        else:
-            out=csm
-
-        return out
 
     def window2(self, shape, windowpct=100.0, widthpct=100.0, stopVal=0, passVal=1):
         # 2D hanning window just like shapes
@@ -566,6 +412,28 @@ class ExternalNode(gpi.NodeAPI):
 
         return out
 
+    def rolloff2D(self, mtx_xy, kernel, clamp_min_percent=5):
+        # mtx_xy: int
+        import numpy as np
+        import bni.gridding.grid_kaiser as gd
+
+        # grid one point at k_0
+        dx = dy = 0.0
+        coords = np.array([0,0], dtype='float32')
+        data = np.array([1.0], dtype='complex64')
+        weights = np.array([1.0], dtype='float32')
+        outdim = np.array([mtx_xy, mtx_xy],dtype=np.int64)
+
+        # grid -> fft -> |x|
+        out = np.abs(self.fft2D(gd.grid(coords, data, weights, kernel, outdim, dx, dy)))
+
+        # clamp the lowest values to a percentage of the max
+        clamp = out.max() * clamp_min_percent/100.0
+        out[out < clamp] = clamp
+
+        # invert
+        return 1.0/out
+
     def kaiserbessel_kernel(self, kernel_table_size, oversampling_ratio):
         #   Generate a Kaiser-Bessel kernel function
         #   OUTPUT: 1D kernel table for radius squared
@@ -573,6 +441,36 @@ class ExternalNode(gpi.NodeAPI):
         import bni.gridding.grid_kaiser as dg
         kernel_dim = np.array([kernel_table_size],dtype=np.int64)
         return dg.kaiserbessel_kernel(kernel_dim, np.float64(oversampling_ratio))
+
+    def fft2D(self, data, dir=0, out_dims_fft=[]):
+        # data: np.complex64
+        # dir: int (0 or 1)
+        # outdims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
+
+        import core.math.fft as corefft
+
+        # generate output dim size array
+        # fortran dimension ordering
+        if len(out_dims_fft):
+            outdims = out_dims_fft.copy()
+        else:
+            outdims = list(data.shape)
+        
+        outdims.reverse()
+        outdims = np.array(outdims, dtype=np.int64)
+
+        # load fft arguments
+        kwargs = {}
+        kwargs['dir'] = dir
+
+        # transform
+        kwargs['dim1'] = 1
+        kwargs['dim2'] = 1
+        kwargs['dim3'] = 0
+        kwargs['dim4'] = 0
+        kwargs['dim5'] = 0
+
+        return corefft.fftw(data, outdims, **kwargs)
 
     def grid2D(self, data, coords, weights, kernel, out_dims):
         # data: np.float32
@@ -611,36 +509,6 @@ class ExternalNode(gpi.NodeAPI):
                     gridded_kspace[coil,extra2,extra1,:,:] = bni_grid.grid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], weights, kernel, outdim, dx, dy)
 
         return gridded_kspace
-
-    def fft2D(self, data, dir=0, out_dims_fft=[], fft_or_zeropad=True):
-        # data: np.complex64
-        # dir: int (0 or 1)
-        # outdims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
-
-        import core.math.fft as corefft
-
-        # generate output dim size array
-        # fortran dimension ordering
-        if len(out_dims_fft):
-            outdims = out_dims_fft.copy()
-        else:
-            outdims = list(data.shape)
-        
-        outdims.reverse()
-        outdims = np.array(outdims, dtype=np.int64)
-
-        # load fft arguments
-        kwargs = {}
-        kwargs['dir'] = dir
-
-        # transform
-        kwargs['dim1'] = 1
-        kwargs['dim2'] = 1
-        kwargs['dim3'] = 0
-        kwargs['dim4'] = 0
-        kwargs['dim5'] = 0
-
-        return corefft.fftw(data, outdims, **kwargs)
 
     def autocalibrationB1Maps2D(self, images):
         # get UI params

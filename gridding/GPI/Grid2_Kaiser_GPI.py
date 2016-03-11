@@ -126,22 +126,30 @@ class ExternalNode(gpi.NodeAPI):
         kernel_table_size = 800
         kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         # pre-calculate the rolloff for the spatial domain
-        roll = self.rolloff2(mtx, kernel)
+        roll = self.rolloff2D(mtx, kernel)
         self.setData('deapodization', roll)
         
         # data dimensions
         nr_points = data.shape[-1]
         nr_arms = data.shape[-2]
         nr_coils = data.shape[0]
-        if data.ndim == 3:
+        if data.ndim == 2:
+            nr_coils = 1
+            extra_dim1 = 1
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
+        elif data.ndim == 3:
+            nr_coils = data.shape[0]
             extra_dim1 = 1
             extra_dim2 = 1
             data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
         elif data.ndim == 4:
+            nr_coils = data.shape[0]
             extra_dim1 = data.shape[-3]
             extra_dim2 = 1
             data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
         elif data.ndim == 5:
+            nr_coils = data.shape[0]
             extra_dim1 = data.shape[-3]
             extra_dim2 = data.shape[-4]
         elif data.ndim > 5:
@@ -171,7 +179,7 @@ class ExternalNode(gpi.NodeAPI):
             
         return 0 
 
-    def rolloff2(self, mtx_xy, kernel, clamp_min_percent=5):
+    def rolloff2D(self, mtx_xy, kernel, clamp_min_percent=5):
         # mtx_xy: int
         import numpy as np
         import bni.gridding.grid_kaiser as gd
@@ -239,7 +247,7 @@ class ExternalNode(gpi.NodeAPI):
 
         return gridded_kspace
 
-    def fft2D(self, data, dir=0, out_dims_fft=[], fft_or_zeropad=True):
+    def fft2D(self, data, dir=0, out_dims_fft=[]):
         # data: np.complex64
         # dir: int (0 or 1)
         # outdims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
@@ -249,7 +257,7 @@ class ExternalNode(gpi.NodeAPI):
         # generate output dim size array
         # fortran dimension ordering
         if len(out_dims_fft):
-            outdims = out_dims_fft
+            outdims = out_dims_fft.copy()
         else:
             outdims = list(data.shape)
         
