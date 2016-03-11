@@ -38,14 +38,20 @@ class ExternalNode(gpi.NodeAPI):
     WIDGET:
         mtx size (n x n): grid matrix size 'n'
         dims per set: dimensions of the sample coordinates (automatically set)
+        oversampling ratio: Oversampling and Kaiser-Bessel kernel function according to
+            Beatty, Philip J., Dwight G. Nishimura, and John M. Pauly. "Rapid gridding
+            reconstruction with a minimal oversampling ratio." Medical Imaging, IEEE
+            Transactions on 24.6 (2005): 799-808.
+        Add FFT and rolloff: push button to perform both FFT and rolloff correction and output the cropped image.
 
     INPUT:
         data: nD array of sampled k-space data
         coords: nD array sample locations (scaled between -0.5 and 0.5)
         weights: density compensation
+        
     
     OUTPUT:
-        out: gridded k-space
+        out: gridded k-space or image cropped to demanded matrix size
         deapodization: grid kernel compensation to be multiplied by gridded
                        data after fft (if desired).
     """
@@ -80,21 +86,20 @@ class ExternalNode(gpi.NodeAPI):
         if coords.shape[-3] != data.shape[-2]:
             self.log.warn("data and coords do not agree in the number of arms")
             return 1
-            if coords.ndim == 4:
-                if data.ndim < 4:
-                    self.log.warn("if coords has 4 dimensions then data also needs 4 or more dimensions")
+        if coords.ndim == 4:
+            if data.ndim < 4:
+                self.log.warn("if coords has 4 dimensions then data also needs 4 or more dimensions")
+                return 1
+            else:
+                if coords.shape[-4] != data.shape[-3]:
+                    self.log.warn("data and coords do not agree in the number of phases / dynamics")
                     return 1
-                else:
-                    if coords.shape[-4] != data.shape[-3]:
-                        self.log.warn("data and coords do not agree in the number of phases / dynamics")
-                        return 1
 
         return 0
 
     def compute(self):
 
         import numpy as np
-        import bni.gridding.grid_kaiser as gd
 
         # get port and widget inputs
         coords = self.getData('coords').astype(np.float32, copy=False)
@@ -141,18 +146,24 @@ class ExternalNode(gpi.NodeAPI):
             extra_dim2 = data.shape[-4]
         elif data.ndim > 5:
             self.log.warn("Not implemented yet")
-        out_dims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
+        out_dims_grid = [nr_coils, extra_dim2, extra_dim1, mtx, nr_arms, nr_points]
+        out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
 
-        # grid
-        gridded_kspace = self.grid2D(data, coords, weights, kernel, out_dims)
+        # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
+        if coords.ndim == 3:
+            coords.shape = [1,nr_arms,nr_points,2]
         
+        # grid
+        self.log.debug("before gridding")
+        gridded_kspace = self.grid2D(data, coords, weights, kernel, out_dims_grid)
+        self.log.debug("after gridding")
         if fft_and_rolloff:
             # FFT
-            dir = 0
-            image_domain = self.fft2D(gridded_kspace, dir, out_dims)
-            
+            image_domain = self.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
+            self.log.debug("after fft")
             # rolloff
             image_domain *= roll
+            self.log.debug("after roll")
             self.setData('out', image_domain[...,mtx_min:mtx_max,mtx_min:mtx_max].squeeze())
         
         else:
@@ -198,7 +209,7 @@ class ExternalNode(gpi.NodeAPI):
         # outdims = [nr_coils, extra_dim2, extra_dim1, mtx_xy, mtx_xy]: int
         import bni.gridding.grid_kaiser as bni_grid
         
-        [nr_coils, extra_dim2, extra_dim1, mtx_xy, dummy] = out_dims
+        [nr_coils, extra_dim2, extra_dim1, mtx_xy, nr_arms, nr_points] = out_dims
         
         # off-center in pixels.
         dx = dy = 0.
@@ -210,9 +221,8 @@ class ExternalNode(gpi.NodeAPI):
         outdim = np.array([mtx_xy,mtx_xy], dtype=np.int64)
 
         # coordinate dimensions
-        if coords.ndim == 3:
+        if coords.shape[0] == 1:
             same_coords_for_all_slices_and_dynamics = True
-            coords.shape = [1,nr_arms,nr_points,2]
         else:
             same_coords_for_all_slices_and_dynamics = False
 
@@ -229,7 +239,7 @@ class ExternalNode(gpi.NodeAPI):
 
         return gridded_kspace
 
-    def fft2D(self, data, dir=0, out_dims=[], fft_or_zeropad=True):
+    def fft2D(self, data, dir=0, out_dims_fft=[], fft_or_zeropad=True):
         # data: np.complex64
         # dir: int (0 or 1)
         # outdims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
@@ -238,8 +248,8 @@ class ExternalNode(gpi.NodeAPI):
 
         # generate output dim size array
         # fortran dimension ordering
-        if len(out_dims):
-            outdims = out_dims
+        if len(out_dims_fft):
+            outdims = out_dims_fft
         else:
             outdims = list(data.shape)
         
