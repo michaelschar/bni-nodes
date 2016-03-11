@@ -82,7 +82,8 @@ class ExternalNode(gpi.NodeAPI):
         self.addOutPort('x', 'NPYarray', dtype=np.complex64)
         self.addOutPort('r', 'NPYarray', dtype=np.complex64)
         self.addOutPort('d', 'NPYarray', dtype=np.complex64)
-        self.addOutPort('Applied CSM', 'NPYarray', dtype=np.complex64)
+        self.addOutPort('oversampled CSM', 'NPYarray', dtype=np.complex64)
+        self.addOutPort('cropped CSM', 'NPYarray', dtype=np.complex64)
         self.addOutPort('x iterations', 'NPYarray', dtype=np.complex64)
 
     def validate(self):
@@ -159,8 +160,8 @@ class ExternalNode(gpi.NodeAPI):
         oversampling_ratio = self.getVal('oversampling ratio')
         
         # for a single iteration step use the csm stored in the out port
-        if step and (self.getData('Applied CSM') is not None):
-            csm = self.getData('Applied CSM')
+        if step and (self.getData('oversampled CSM') is not None):
+            csm = self.getData('oversampled CSM')
         else:
             csm = self.getData('coil sensitivity')
         if csm is not None:
@@ -218,11 +219,9 @@ class ExternalNode(gpi.NodeAPI):
         # pre-calculate the rolloff for the spatial domain
         roll = kaiser2D.rolloff2D(mtx, kernel)
 
-        # for a single iteration step use the applied csm and intermediate results stored in outports
+        # for a single iteration step use the oversampled csm and intermediate results stored in outports
         if step and (self.getData('d') is not None):
-            # zero-pad csm to oversampled matrix size
-            if oversampling_ratio > 1:
-                csm = np.pad(csm,[(0,0),(0,0),(0,0),(mtx_min,mtx-mtx_max),(mtx_min,mtx-mtx_max)], 'constant', constant_values=(0,0))
+            self.log.debug("Save some time and use the previously determined csm stored in the cropped CSM outport.")
         else: # this is the normal path (not single iteration step)
             # grid to create images that are corrupted by
             # aliasing due to undersampling.  If the k-space data have an
@@ -257,7 +256,8 @@ class ExternalNode(gpi.NodeAPI):
                     out_dims_oversampled_image_domain = [nr_coils, extra_dim2, extra_dim1, csm_oversampled_mtx, csm_oversampled_mtx]
                     csm = kaiser2D.fft2D(csm, dir=1, out_dims_fft=out_dims_oversampled_image_domain)
                     csm = kaiser2D.fft2D(csm, dir=0, out_dims_fft=out_dims_fft)
-            self.setData('Applied CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
+            self.setData('oversampled CSM', csm)
+            self.setData('cropped CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
 
         # keep a conjugate csm set on hand
         csm_conj = np.conj(csm)
@@ -308,10 +308,10 @@ class ExternalNode(gpi.NodeAPI):
             x = np.zeros_like(d)
             Ad = Ad_0
 
-        # CG - iter 1
+        # CG - iter 1 or step
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
         
-        current_iteration = x_last
+        current_iteration = x_last.copy()
         current_iteration.shape = iterations_shape
         if step:
             x_iterations[-1,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
@@ -340,7 +340,7 @@ class ExternalNode(gpi.NodeAPI):
             # CG
             d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
 
-            current_iteration = x_last
+            current_iteration = x_last.copy()
             current_iteration.shape = iterations_shape
             x_iterations[i+1,:,:,:,:] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
 
