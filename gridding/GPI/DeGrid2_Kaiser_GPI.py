@@ -54,6 +54,7 @@ class ExternalNode(gpi.NodeAPI):
     def initUI(self):
         # Widgets
         self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
+        self.addWidget('PushButton', 'New', toggle=True, button_title='ON', val=1)
         
 
         # IO Ports
@@ -66,11 +67,14 @@ class ExternalNode(gpi.NodeAPI):
         import numpy as np
         import bni.gridding.grid_kaiser as dg
 
-        crds = self.getData('coords').astype(np.float32, copy=False)
-        gdata = self.getData('data').astype(np.complex64, copy=False)
-        
+        # get port and widget inputs
+        coords = self.getData('coords').astype(np.float32, copy=False)
+        data = self.getData('data').astype(np.complex64, copy=False)
         oversampling_ratio = self.getVal('oversampling ratio')
-        mtx_original = gdata.shape[-1]
+        new = self.getVal('New')
+        
+        # Determine matrix size before and after oversampling
+        mtx_original = data.shape[-1]
         mtx = np.int(mtx_original * oversampling_ratio)
         if mtx%2:
             mtx+=1
@@ -81,31 +85,69 @@ class ExternalNode(gpi.NodeAPI):
             mtx_min = 0
             mtx_max = mtx
         
-        # assume the last dims (i.e. each image) must be degridded independently
-        gdata_iter, iter_shape = self.pinch(gdata, stop=-2)
-        if iter_shape == []:
-            iter_shape = [1]
+        if new:
+        # data dimensions
+            nr_points = coords.shape[-2]
+            nr_arms = coords.shape[-3]
+            nr_coils = data.shape[0]
+            if data.ndim == 3:
+                extra_dim1 = 1
+                extra_dim2 = 1
+                data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+            elif data.ndim == 4:
+                extra_dim1 = data.shape[-3]
+                extra_dim2 = 1
+                data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+            elif data.ndim == 5:
+                extra_dim1 = data.shape[-3]
+                extra_dim2 = data.shape[-4]
+            elif data.ndim > 5:
+                self.log.warn("Not implemented yet")
+            out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
+            out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
+            
+            # pre-calculate Kaiser-Bessel kernel
+            kernel_table_size = 800
+            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
+            
+            # pre-calculate the rolloff for the spatial domain
+            roll = self.rolloff2(mtx, kernel)
 
-        # construct an output array w/ slice dims
-        out_shape = iter_shape + list(crds.shape)[:-1]
-        out = np.zeros(out_shape, dtype=gdata.dtype)
-        out_iter,_ = self.pinch(out, stop=-2)
+            # perform rolloff correction
+            rolloff_corrected_data = data * roll[mtx_min:mtx_max,mtx_min:mtx_max]
         
-        # pre-calculate Kaiser-Bessel kernel
-        kernel_table_size = 800
-        kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
+            # inverse-FFT with zero-interpolation to oversampled k-space
+            oversampled_kspace = self.fft2D(rolloff_corrected_data, dir=1, out_dims=out_dims_fft)
+       
+            out = self.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid)
+            self.setData('out', out.squeeze())
+        else:
         
-        # pre-calculate the rolloff for the spatial domain
-        roll = self.rolloff2(mtx, kernel)
+            # assume the last dims (i.e. each image) must be degridded independently
+            data_iter, iter_shape = self.pinch(data, stop=-2)
+            if iter_shape == []:
+                iter_shape = [1]
 
-        # degrid all slices
-        for i in range(np.prod(iter_shape)):
-            oversampled_kspace = roll[mtx_min:mtx_max,mtx_min:mtx_max]*gdata_iter[i]
-            oversampled_kspace = self.fft2(oversampled_kspace, dir=1, out_shape=[mtx, mtx])
-            out_iter[i] = dg.degrid(crds, oversampled_kspace, kernel)
+            # construct an output array w/ slice dims
+            out_shape = iter_shape + list(coords.shape)[:-1]
+            out = np.zeros(out_shape, dtype=data.dtype)
+            out_iter,_ = self.pinch(out, stop=-2)
+            
+            # pre-calculate Kaiser-Bessel kernel
+            kernel_table_size = 800
+            kernel = self.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
+            
+            # pre-calculate the rolloff for the spatial domain
+            roll = self.rolloff2(mtx, kernel)
 
-        # reset array shapes and output
-        self.setData('out', out.squeeze())
+            # degrid all slices
+            for i in range(np.prod(iter_shape)):
+                oversampled_kspace = roll[mtx_min:mtx_max,mtx_min:mtx_max]*data_iter[i]
+                oversampled_kspace = self.fft2(oversampled_kspace, dir=1, out_shape=[mtx, mtx])
+                out_iter[i] = dg.degrid(coords, oversampled_kspace, kernel)
+
+            # reset array shapes and output
+            self.setData('out', out.squeeze())
 
         return(0)
 
@@ -195,4 +237,70 @@ class ExternalNode(gpi.NodeAPI):
         kernel_dim = np.array([kernel_table_size],dtype=np.int64)
         return dg.kaiserbessel_kernel(kernel_dim, np.float64(oversampling_ratio))
 
+    def fft2D(self, data, dir=0, out_dims=[], fft_or_zeropad=True):
+        # data: np.complex64
+        # dir: int (0 or 1)
+        # outdims = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
 
+        import core.math.fft as corefft
+
+        # generate output dim size array
+        # fortran dimension ordering
+        if len(out_dims):
+            outdims = out_dims
+        else:
+            outdims = list(data.shape)
+        
+        outdims.reverse()
+        outdims = np.array(outdims, dtype=np.int64)
+
+        # load fft arguments
+        kwargs = {}
+        kwargs['dir'] = dir
+
+        # transform
+        if fft_or_zeropad:
+            kwargs['dim1'] = 1
+            kwargs['dim2'] = 1
+        else:
+            kwargs['dim1'] = 0
+            kwargs['dim2'] = 0
+        kwargs['dim3'] = 0
+        kwargs['dim4'] = 0
+        kwargs['dim5'] = 0
+        
+        self.log.debug(str(data.shape)+", "+str(outdims))
+
+        return corefft.fftw(data, outdims, **kwargs)
+
+    def degrid2D(self, data, coords, kernel, outdims):
+        # data: np.float32
+        # coords: np.complex64
+        # weights: np.float32
+        # kernel: np.float64
+        # outdims = [nr_coils, extra_dim2, extra_dim1, mtx_xy, mtx_xy]: int
+        import bni.gridding.grid_kaiser as bni_grid
+        
+        [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points] = outdims
+        
+        # coordinate dimensions
+        self.log.debug("outdims = " + str(outdims) + ", and coords.shape = " + str(coords.shape))
+        if coords.shape[0] == 1:
+            same_coords_for_all_slices_and_dynamics = True
+        else:
+            same_coords_for_all_slices_and_dynamics = False
+
+        # gridded kspace
+        degridded_kspace = np.zeros([nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points], dtype=data.dtype)
+ 
+        # degrid all slices
+        for extra1 in range(extra_dim1):
+            if same_coords_for_all_slices_and_dynamics:
+                extra1_coords = 0
+            else:
+                extra1_coords = extra1
+            for extra2 in range(extra_dim2):
+                for coil in range(nr_coils):
+                    degridded_kspace[coil,extra2,extra1,:,:] = bni_grid.degrid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], kernel)
+
+        return degridded_kspace
