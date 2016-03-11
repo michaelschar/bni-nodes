@@ -161,6 +161,7 @@ class ExternalNode(gpi.NodeAPI):
         # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
         if coords.ndim == 3:
             coords.shape = [1,nr_arms,nr_points,2]
+            weights.shape = [1,nr_arms,nr_points]
         
         # grid
         self.log.debug("before gridding")
