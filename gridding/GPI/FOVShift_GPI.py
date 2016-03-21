@@ -42,11 +42,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addOutPort('adjusted data', 'NPYarray', dtype=[np.complex64,np.complex128])
 
 
-    # process the input data, send it to the output port
-    # return 1 if the computation failed
-    # return 0 if the computation was successful 
-    def compute(self):
-        data = self.getData('data')
+    def validate(self):
         crds = self.getData('crds')
         inparam = self.getData('params_in')
 
@@ -105,6 +101,15 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('dz (pixels)', val=zoff)
             self.log.node("*** Computed off-center dz="+str(zoff))   
  
+
+
+    # process the input data, send it to the output port
+    # return 1 if the computation failed
+    # return 0 if the computation was successful 
+    def compute(self):
+        data = self.getData('data')
+        crds = self.getData('crds')
+
         dx = self.getVal('dx (pixels)')
         dy = self.getVal('dy (pixels)')
         if crds.shape[-1] == 3:
