@@ -135,11 +135,8 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('Dynamic data - average all dynamics for csm', visible=False)
             
             # check size of data vs. csm
-            if data.ndim != csm.ndim:
-                self.log.warn("data and csm do not agree in the number of dimensions")
-                return 1
-            elif data.shape[:-2] != csm.shape[:-2]:
-                self.log.warn("data and csm do not agree in shape (last 2 dimensions don't matter).")
+            if data.shape[0] != csm.shape[0]:
+                self.log.warn("data and csm do not agree in in number of coils.")
                 return 1
                     
         return 0
@@ -168,11 +165,11 @@ class ExternalNode(gpi.NodeAPI):
             csm = csm.astype(np.complex64, copy=False)
         
         # oversampling: Oversample at the beginning and crop at the end
-        mtx = np.int(mtx_original * oversampling_ratio)
+        mtx = np.int(np.around(mtx_original * oversampling_ratio))
         if mtx%2:
             mtx+=1
         if oversampling_ratio > 1:
-            mtx_min = np.int((mtx-mtx_original)/2)
+            mtx_min = np.int(np.around((mtx-mtx_original)/2))
             mtx_max = mtx_min + mtx_original
         else:
             mtx_min = 0
