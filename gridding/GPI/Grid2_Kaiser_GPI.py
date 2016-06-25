@@ -112,12 +112,12 @@ class ExternalNode(gpi.NodeAPI):
         fft_and_rolloff = self.getVal('Add FFT and rolloff')
 
         # Determine matrix size after oversampling
-        mtx = np.int(mtx_original * oversampling_ratio)
+        mtx = np.int(np.around(mtx_original * oversampling_ratio))
         if mtx%2:
             mtx+=1
         if fft_and_rolloff:
             if oversampling_ratio > 1:
-                mtx_min = np.int((mtx-mtx_original)/2)
+                mtx_min = np.int(np.around((mtx-mtx_original)/2))
                 mtx_max = mtx_min + mtx_original
             else:
                 mtx_min = 0
