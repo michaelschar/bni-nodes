@@ -68,10 +68,14 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('SpinBox', 'iterations', val=10, min=1)
         self.addWidget('PushButton', 'step')
         self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
-        self.addWidget('Slider', 'Autocalibration Width (%)', val=10, min=0, max=100)
+        self.addWidget('Slider', 'Autocalibration Width (%)', val=15, min=0, max=100)
         self.addWidget('Slider', 'Autocalibration Taper (%)', val=50, min=0, max=100)
-        self.addWidget('Slider', 'Mask Floor (% of max mag)', val=1, min=0, max=100)
+        self.addWidget('Slider', 'Mask Floor (% of max mag)', val=10, min=0, max=100)
+        self.addWidget('SpinBox', 'Autocalibration mask dilation [pixels]', val=10, min=0, max=100)
+        self.addWidget('SpinBox','Autocalibration SDC Iterations',val=10, min=1)
         self.addWidget('PushButton', 'Dynamic data - average all dynamics for csm', toggle=True, button_title='ON', val=1)
+        self.addWidget('PushButton', 'Golden Angle - combine dynamics before gridding', toggle=True, button_title='ON', val=1)
+        self.addWidget('Slider', '# golden angle dynamics for csm', val=150, min=0, max=10000)
 
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=[np.complex64, np.complex128])
@@ -115,7 +119,7 @@ class ExternalNode(gpi.NodeAPI):
                 return 1
             else:
                 if coords.shape[-4] != data.shape[-3]:
-                    self.log.warn("data and coords do not agree in the number of phases / dynamics")
+                    self.log.warn("data and coords do not agree in the number of phases / dynamics: coords.shape[-4]="+str(coords.shape[-4])+" != data.shape[-3]="+str(data.shape[-3]))
                     return 1
 
         self.log.debug("validate SENSE2 - check csm")
@@ -124,6 +128,8 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('Autocalibration Width (%)', visible=True)
             self.setAttr('Autocalibration Taper (%)', visible=True)
             self.setAttr('Mask Floor (% of max mag)', visible=True)
+            self.setAttr('Autocalibration mask dilation [pixels]', visible=True)
+            self.setAttr('Autocalibration SDC Iterations', visible=True)
             if self.getData('data').ndim > 3:
                 self.setAttr('Dynamic data - average all dynamics for csm', visible=True)
             else:
@@ -132,13 +138,23 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('Autocalibration Width (%)', visible=False)
             self.setAttr('Autocalibration Taper (%)', visible=False)
             self.setAttr('Mask Floor (% of max mag)', visible=False)
+            self.setAttr('Autocalibration mask dilation [pixels]', visible=False)
             self.setAttr('Dynamic data - average all dynamics for csm', visible=False)
+            self.setAttr('Autocalibration SDC Iterations', visible=False)
             
             # check size of data vs. csm
             if data.shape[0] != csm.shape[0]:
                 self.log.warn("data and csm do not agree in in number of coils.")
                 return 1
-                    
+        GA = self.getVal('Golden Angle - combine dynamics before gridding')
+        if GA:
+            self.setAttr('# golden angle dynamics for csm', visible=True)
+            if coords.ndim == 3:
+                self.setAttr('# golden angle dynamics for csm', max=coords.shape[-3])
+            elif coords.ndim == 4:
+                self.setAttr('# golden angle dynamics for csm', max=coords.shape[-3]*coords.shape[-4])
+        else:
+            self.setAttr('# golden angle dynamics for csm', visible=False)
         return 0
     
 
@@ -155,6 +171,7 @@ class ExternalNode(gpi.NodeAPI):
         iterations = self.getVal('iterations')
         step = self.getVal('step')
         oversampling_ratio = self.getVal('oversampling ratio')
+        GA = self.getVal('Golden Angle - combine dynamics before gridding')
         
         # for a single iteration step use the csm stored in the out port
         if step and (self.getData('oversampled CSM') is not None):
@@ -215,11 +232,137 @@ class ExternalNode(gpi.NodeAPI):
         kernel = kaiser2D.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
         
         # pre-calculate the rolloff for the spatial domain
+        
         roll = kaiser2D.rolloff2D(mtx, kernel)
 
         # for a single iteration step use the oversampled csm and intermediate results stored in outports
         if step and (self.getData('d') is not None):
             self.log.debug("Save some time and use the previously determined csm stored in the cropped CSM outport.")
+        elif GA: #combine data from GA dynamics before gridding, use code from VirtualChannels_GPI.py
+            # grid images for each phase - needs to be done at some point, not really here for csm though.
+            self.log.debug("Grid undersampled data")
+            gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid)
+            # FFT
+            image_domain = kaiser2D.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
+            # rolloff
+            image_domain *= roll
+            
+            twoD_or_threeD = coords.shape[-1]
+            # parameters from UI
+            UI_width = self.getVal('Autocalibration Width (%)')
+            UI_taper = self.getVal('Autocalibration Taper (%)')
+            UI_mask_floor = self.getVal('Mask Floor (% of max mag)')
+            mask_dilation = self.getVal('Autocalibration mask dilation [pixels]')
+            UI_average_csm = self.getVal('Dynamic data - average all dynamics for csm')
+            numiter = self.getVal('Autocalibration SDC Iterations')
+            original_csm_mtx = np.int(0.01 * UI_width * mtx_original)
+            
+            is_GoldenAngle_data = True
+            nr_arms_csm = self.getVal('# golden angle dynamics for csm')
+            csm_data = data.copy()
+            nr_all_arms_csm = extra_dim1 * nr_arms
+            #extra_dim2_csm = 1
+            extra_dim1_csm = 1
+            #csm_data.shape = [nr_coils,extra_dim2_csm,extra_dim1_csm,nr_all_arms_csm,nr_points]
+            #csm_data = csm_data[:,0:nr_arms_csm,:]
+            
+            # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
+            if coords.ndim == 3:
+                coords.shape = [1,nr_arms,nr_points,twoD_or_threeD]
+            
+            # create low resolution csm
+            # cropping the data will make gridding and FFT much faster
+            magnitude_one_interleave = np.zeros(nr_points)
+            for x in range(nr_points):
+                magnitude_one_interleave[x] = np.sqrt( coords[0,0,x,0]**2 + coords[0,0,x,1]**2)
+            within_csm_width_radius = magnitude_one_interleave[:] < (0.01 * UI_width * 0.5) # for BNI spirals should be 0.45 instead of 0.5
+            nr_points_csm_width = within_csm_width_radius.sum()
+            # in case of radial trajectory, it doesn't start at zero..
+            found_start_point = 0
+            found_end_point = 0
+            for x in range(nr_points):
+                if ((not found_start_point) and (within_csm_width_radius[x])):
+                    found_start_point = 1
+                    start_point = x
+                if ((not found_end_point) and (found_start_point) and (not within_csm_width_radius[x])):
+                    found_end_point = 1
+                    end_point = x
+            if not found_end_point:
+                end_point = nr_points
+            self.log.node("Start and end points in interleave are: "+str(start_point)+" and "+str(end_point)+" leading to "+str(nr_points_csm_width)+" points for csm.")
+            
+            arm_counter = 0
+            extra_dim1_counter = 0
+            arm_with_data_counter = 0
+            while (arm_with_data_counter < nr_arms_csm and extra_dim1_counter < extra_dim1):
+                if (coords[extra_dim1_counter, arm_counter,0,0] != coords[extra_dim1_counter, arm_counter,-1,0]): #only equal when no data in this interleave during resorting
+                    arm_with_data_counter += 1
+                arm_counter += 1
+                if arm_counter == nr_arms:
+                    arm_counter = 0
+                    extra_dim1_counter += 1
+            self.log.node("Found "+str(arm_with_data_counter)+" arms, and was looking for "+str(nr_arms_csm)+" from a total of "+str(nr_all_arms_csm)+" arms.")
+            
+            csm_data = np.zeros([nr_coils,extra_dim2,extra_dim1_csm,arm_with_data_counter,nr_points_csm_width], dtype=data.dtype)
+            csm_coords = np.zeros([1,arm_with_data_counter,nr_points_csm_width,twoD_or_threeD], dtype=coords.dtype)
+            
+            arm_counter = 0
+            extra_dim1_counter = 0
+            arm_with_data_counter = 0
+            while (arm_with_data_counter < nr_arms_csm and extra_dim1_counter < extra_dim1):
+                if (coords[extra_dim1_counter, arm_counter,0,0] != coords[extra_dim1_counter, arm_counter,-1,0]): #only equal when no data in this interleave during resorting
+                    csm_data[:,:,0,arm_with_data_counter,:] = data[:,:,extra_dim1_counter,arm_counter,start_point:end_point]
+                    csm_coords[0,arm_with_data_counter,:,:] = coords[extra_dim1_counter,arm_counter,start_point:end_point,:]
+                    arm_with_data_counter += 1
+                arm_counter += 1
+                if arm_counter == nr_arms:
+                    arm_counter = 0
+                    extra_dim1_counter += 1
+            self.log.node("Found "+str(arm_with_data_counter)+" arms, and was looking for "+str(nr_arms_csm)+" from a total of "+str(nr_all_arms_csm)+" arms.")
+            
+            # now set the dimension lists
+            out_dims_grid_csm = [nr_coils, extra_dim2, extra_dim1_csm, mtx, arm_with_data_counter, nr_points_csm_width]
+            out_dims_fft_csm = [nr_coils, extra_dim2, extra_dim1_csm, mtx, mtx]
+            
+            # generate SDC based on number of arms and nr of points being used for csm
+            import core.gridding.sdc as sd
+            #csm_weights = sd.twod_sdcsp(csm_coords.squeeze().astype(np.float64), numiter, 0.01 * UI_taper, mtx)
+            cmtxdim = np.array([mtx,mtx],dtype=np.int64)
+            wates = np.ones((arm_with_data_counter * nr_points_csm_width), dtype=np.float64)
+            coords_for_sdc = csm_coords.astype(np.float64)
+            coords_for_sdc.shape = [arm_with_data_counter * nr_points_csm_width, twoD_or_threeD]
+            csm_weights = sd.twod_sdc(coords_for_sdc, wates, cmtxdim, numiter, 0.01 * UI_taper )
+            csm_weights.shape = [1,arm_with_data_counter,nr_points_csm_width]
+            
+            # Grid
+            gridded_kspace_csm = kaiser2D.grid2D(csm_data, csm_coords, csm_weights.astype(np.float32), kernel, out_dims_grid_csm)
+            image_domain_csm = kaiser2D.fft2D(gridded_kspace_csm, dir=0, out_dims_fft=out_dims_fft_csm)
+            # rolloff
+            image_domain_csm *= roll
+            # # crop to original matrix size
+            # csm = image_domain_csm[...,mtx_min:mtx_max,mtx_min:mtx_max]
+            # normalize by rms (better would be to use a whole body coil image
+            csm_rms = np.sqrt(np.sum(np.abs(image_domain_csm)**2, axis=0))
+            image_domain_csm = image_domain_csm / csm_rms
+            # zero out points that are below mask threshold
+            thresh = 0.01 * UI_mask_floor * csm_rms.max()
+            mask = csm_rms > thresh
+            # use scipy library to grow mask and fill holes.
+            from scipy import ndimage
+            mask.shape = [mtx,mtx]
+            mask = ndimage.morphology.binary_dilation(mask, iterations=mask_dilation)
+            mask = ndimage.binary_fill_holes(mask)
+            
+            image_domain_csm *= mask
+            if extra_dim1 > 1:
+                csm = np.zeros([nr_coils, extra_dim2, extra_dim1, mtx, mtx], dtype=image_domain_csm.dtype)
+                for extra_dim1_counter in range(extra_dim1):
+                    csm[:,:,extra_dim1_counter,:,:]=image_domain_csm[:,:,0,:,:]
+            else:
+                csm = image_domain_csm
+            self.setData('oversampled CSM', csm)
+            self.setData('cropped CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
+            
         else: # this is the normal path (not single iteration step)
             # grid to create images that are corrupted by
             # aliasing due to undersampling.  If the k-space data have an
