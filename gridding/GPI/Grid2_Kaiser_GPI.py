@@ -87,7 +87,7 @@ class ExternalNode(gpi.NodeAPI):
             self.log.warn("data and coords do not agree in the number of arms")
             return 1
         if coords.ndim == 4:
-            if data.ndim < 4:
+            if data.ndim < 3:
                 self.log.warn("if coords has 4 dimensions then data also needs 4 or more dimensions")
                 return 1
             else:
