@@ -54,6 +54,7 @@ class ExternalNode(gpi.NodeAPI):
     def initUI(self):
         # Widgets
         self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
+        self.addWidget('SpinBox', 'number of threads', val=4, min=1, max=64, collapsed=True)
         
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=np.complex64, obligation=gpi.REQUIRED)
@@ -69,6 +70,7 @@ class ExternalNode(gpi.NodeAPI):
         coords = self.getData('coords').astype(np.float32, copy=False)
         data = self.getData('data').astype(np.complex64, copy=False)
         oversampling_ratio = self.getVal('oversampling ratio')
+        number_threads = self.getVal('number of threads')
         
         # Determine matrix size before and after oversampling
         mtx_original = data.shape[-1]
@@ -126,7 +128,7 @@ class ExternalNode(gpi.NodeAPI):
         # inverse-FFT with zero-interpolation to oversampled k-space
         oversampled_kspace = kaiser2D.fft2D(rolloff_corrected_data, dir=1, out_dims_fft=out_dims_fft)
    
-        out = kaiser2D.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid)
+        out = kaiser2D.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid, number_threads=number_threads)
         self.setData('out', out.squeeze())
  
         return(0)

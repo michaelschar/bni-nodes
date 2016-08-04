@@ -32,11 +32,13 @@
  */
 
 #include "PyFI/PyFI.h"
+#include "multiproc/threads.c"
 using namespace PyFI;
 using namespace PyFI::FFTW;
 
 #include <iostream>
 using namespace std;
+#include <pthread.h>
 
 #include "bni/gridding/gridding.cpp"
 
@@ -85,14 +87,22 @@ PYFI_FUNC(degrid)
     PYFI_POSARG(Array<float>, crds);
     PYFI_POSARG(Array<complex<float> >, data);
     PYFI_POSARG(Array<float>, kernel);
+    PYFI_POSARG(int64_t, numThreads);
 
     std::vector<uint64_t> outdim = crds->dimensions_vector();
     outdim.erase(outdim.begin());
 
     PYFI_SETOUTPUT_ALLOC(Array<complex<float> >, outdata, outdim);
 
-    _degrid2(*data, *crds, *outdata, *kernel);
+    if (*numThreads > 1)
+    {
+        _degrid2_threaded(data, crds, outdata, kernel, *numThreads);
 
+    } else
+    {
+        _degrid2(*data, *crds, *outdata, *kernel);
+    }
+    
     PYFI_END(); /* This must be the last line */
 } /* grid */
 

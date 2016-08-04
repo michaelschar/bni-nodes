@@ -174,12 +174,13 @@ def autocalibrationB1Maps2D(images, taper=50, width=10, mask_floor=1, average_cs
 
     return out
 
-def degrid2D(data, coords, kernel, outdims):
+def degrid2D(data, coords, kernel, outdims, number_threads=8):
     # data: np.float32
     # coords: np.complex64
     # weights: np.float32
     # kernel: np.float64
     # outdims = [nr_coils, extra_dim2, extra_dim1, mtx_xy, mtx_xy]: int
+    # number_threads: int
     import bni.gridding.grid_kaiser as bni_grid
     
     [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points] = outdims
@@ -201,7 +202,7 @@ def degrid2D(data, coords, kernel, outdims):
             extra1_coords = extra1
         for extra2 in range(extra_dim2):
             for coil in range(nr_coils):
-                degridded_kspace[coil,extra2,extra1,:,:] = bni_grid.degrid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], kernel)
+                degridded_kspace[coil,extra2,extra1,:,:] = bni_grid.degrid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], kernel, number_threads)
 
     return degridded_kspace
 

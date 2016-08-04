@@ -36,6 +36,16 @@
 
 #include "bni/gridding/kaiserbessel.cpp"
 
+/* return forced template */
+#ifndef ITSELF_FUNC
+#define ITSELF_FUNC
+template <class T>
+inline T itself(T arg)
+{
+    return arg;
+}
+#endif
+
 #define _sqr(__se) ((__se)*(__se))
 #define dist2(_x,_y) (_sqr(_x)+_sqr(_y))
 
@@ -118,6 +128,94 @@ void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<
  *  out: nD array with 1-vec dimensions equal to coords array.
  *  kernel_table: 1D array with Kaiser-Bessel kernel table
  */
+
+/*
+ * The work done by an individual thread
+ *    -this could be called with a macro for
+ *     1 thread, and 0 current thread and it
+ *     should behave the same as _degrid2()
+ */
+template<class T>
+void _degrid2_thread(int *num_threads, int *cur_thread, Array<complex<T> > &data, Array<T> &coords, Array<complex<T> > &out, Array<T> &kernel_table)
+{
+    int imin, imax, jmin, jmax, i, j;
+    int width = data.dimensions(0); // assume isotropic dims
+    int width_div2 = width / 2;
+    uint64_t p;
+    T x, y, ix, jy;
+    T kernelRadius = DEFAULT_RADIUS_FOV_PRODUCT / width;
+    T kernelRadius_sqr = kernelRadius * kernelRadius;
+    T width_inv = 1.0 / width;
+    
+    T dist_multiplier = (kernel_table.dimensions(0) - 1)/kernelRadius_sqr;
+    
+    /* split threads up by even chunks of data_out memory */
+    unsigned long numSections = out.size() / *num_threads;
+    unsigned long p_start = *cur_thread * numSections;
+    unsigned long p_end = (*cur_thread+1) * numSections;
+    
+    /* loop over output data points */
+    for (p=p_start; p<p_end; p++)
+    {
+        complex<T> d = 0.;
+        
+        /* get the coordinates of the datapoint to grid
+         *  these vary between -.5 -- +.5               */
+        x = coords.get1v(p, 0);
+        y = coords.get1v(p, 1);
+        
+        /* set the boundaries of final dataset for gridding this point */
+        ix = x * width + width_div2;
+        set_minmax(ix, &imin, &imax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+        jy = y * width + width_div2;
+        set_minmax(jy, &jmin, &jmax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+        
+        /* Convolve the kernel at the coordinate location to get a
+         * non-cartesian sample */
+        for (j=jmin; j<=jmax; ++j)
+        {
+            jy = (j - width_div2) * width_inv;
+            for (i=imin; i<=imax; ++i)
+            {
+                ix = (i - width_div2) * width_inv;
+                T dist_sqr = dist2(ix - x, jy - y);
+                if (dist_sqr < kernelRadius_sqr)
+                {
+                    T ker = get1(kernel_table, (int) rint(dist_sqr * dist_multiplier));
+                    d += get2(data, i, j) * ker; // convolution sum
+                }
+            }
+        }
+        
+        get1(out, p) = d; // store the sum for this coordinate point
+    }
+}
+
+
+
+
+/* the actual calling function for a threaded de-grid */
+template <class T>
+void _degrid2_threaded(Array<complex<T> > *data,
+                      Array<T> *crds,
+                      Array<complex<T> > *outdata,
+                      Array<T> *kernel,
+                      int num_threads)
+
+{
+    /* Make sure output array is initialized */
+    *outdata = complex<T>(0.0);
+    
+    /* start threads */
+    create_threads4(num_threads,
+                    itself(_degrid2_thread<T>),
+                    data,
+                    crds,
+                    outdata,
+                    kernel);
+    
+} // end degrid2_threaded()
+
 template<class T>
 void _degrid2(Array<complex<T> > &data, Array<T> &coords, Array<complex<T> > &out, Array<T> &kernel_table)
 {
