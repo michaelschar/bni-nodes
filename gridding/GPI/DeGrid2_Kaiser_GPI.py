@@ -128,7 +128,7 @@ class ExternalNode(gpi.NodeAPI):
         # inverse-FFT with zero-interpolation to oversampled k-space
         oversampled_kspace = kaiser2D.fft2D(rolloff_corrected_data, dir=1, out_dims_fft=out_dims_fft)
    
-        out = kaiser2D.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid, number_threads=number_threads)
+        out = kaiser2D.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
         self.setData('out', out.squeeze())
  
         return(0)

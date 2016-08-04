@@ -421,7 +421,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad = csm * d # add coil phase
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
-            Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads)
+            Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
             Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
@@ -439,7 +439,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad_0 = csm * d_0 # add coil phase
             Ad_0 *= roll # pre-rolloff for degrid convolution
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=1)
-            Ad_0 = kaiser2D.degrid2D(Ad_0, coords, kernel, out_dims_degrid, number_threads=number_threads)
+            Ad_0 = kaiser2D.degrid2D(Ad_0, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
             Ad_0 = kaiser2D.grid2D(Ad_0, coords, weights, kernel, out_dims_grid)
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=0)
             Ad_0 *= roll
@@ -474,7 +474,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad = csm * d # add coil phase
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
-            Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads)
+            Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
             Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
