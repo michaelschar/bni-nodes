@@ -243,7 +243,7 @@ class ExternalNode(gpi.NodeAPI):
         elif GA: #combine data from GA dynamics before gridding, use code from VirtualChannels_GPI.py
             # grid images for each phase - needs to be done at some point, not really here for csm though.
             self.log.debug("Grid undersampled data")
-            gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid)
+            gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
             # FFT
             image_domain = kaiser2D.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
             # rolloff
@@ -337,7 +337,7 @@ class ExternalNode(gpi.NodeAPI):
             csm_weights.shape = [1,arm_with_data_counter,nr_points_csm_width]
             
             # Grid
-            gridded_kspace_csm = kaiser2D.grid2D(csm_data, csm_coords, csm_weights.astype(np.float32), kernel, out_dims_grid_csm)
+            gridded_kspace_csm = kaiser2D.grid2D(csm_data, csm_coords, csm_weights.astype(np.float32), kernel, out_dims_grid_csm, number_threads=number_threads)
             image_domain_csm = kaiser2D.fft2D(gridded_kspace_csm, dir=0, out_dims_fft=out_dims_fft_csm)
             # rolloff
             image_domain_csm *= roll
@@ -370,7 +370,7 @@ class ExternalNode(gpi.NodeAPI):
             # aliasing due to undersampling.  If the k-space data have an
             # auto-calibration region, then this can be used to generate B1 maps.
             self.log.debug("Grid undersampled data")
-            gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid)
+            gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
             # FFT
             image_domain = kaiser2D.fft2D(gridded_kspace, dir=0, out_dims_fft=out_dims_fft)
             # rolloff
@@ -422,7 +422,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
             Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
-            Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
+            Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
             Ad = csm_conj * Ad # broadcast multiply to remove coil phase
@@ -440,7 +440,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad_0 *= roll # pre-rolloff for degrid convolution
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=1)
             Ad_0 = kaiser2D.degrid2D(Ad_0, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
-            Ad_0 = kaiser2D.grid2D(Ad_0, coords, weights, kernel, out_dims_grid)
+            Ad_0 = kaiser2D.grid2D(Ad_0, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=0)
             Ad_0 *= roll
             Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
@@ -475,7 +475,7 @@ class ExternalNode(gpi.NodeAPI):
             Ad *= roll # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
             Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid, number_threads=number_threads, oversampling_ratio = oversampling_ratio)
-            Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
+            Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
             Ad = csm_conj * Ad # broadcast multiply to remove coil phase
