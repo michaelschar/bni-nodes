@@ -71,12 +71,129 @@ void set_minmax(T x, int *min, int *max, int maximum, T radius)
  *  dx, dy: scaler pixel shift in
  */
 template<class T>
+void _grid2_thread(int *num_threads, int *cur_thread, Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<complex<T> > &out, Array<T> &kernel_table, T dx, T dy)
+{
+    int imin, imax, jmin, jmax, i, j;
+    int width = out.dimensions(0); // assume isotropic dims
+    int width_div2 = width / 2;
+    uint64_t arms = 1;
+    uint64_t points_in_arm = 1;
+    uint64_t arms_times_coils = 1;
+    uint64_t coils = 1;
+    uint64_t coil, arm, point;
+    uint64_t width_times_coil = width;
+    T x, y, ix, jy;
+    T kernelRadius = DEFAULT_RADIUS_FOV_PRODUCT / width;
+    T kernelRadius_sqr = kernelRadius * kernelRadius;
+    T width_inv = 1.0 / width;
+    
+    T dist_multiplier = (kernel_table.dimensions(0) - 1)/kernelRadius_sqr;
+    
+    out = complex<T>(0.0);
+    
+    if (coords.ndim() == 3)
+    {
+        points_in_arm = coords.dimensions(1);
+        arms = coords.dimensions(2);
+    }
+    
+    if (out.ndim() == 3)
+    {
+        coils = out.dimensions(2);
+    }
+    arms_times_coils = arms * coils;
+    width_times_coil = width * coils;
+    
+    /* split threads up by even chunks of data_out memory */
+    uint64_t numSections = coils / *num_threads;
+    uint64_t coil_start = *cur_thread * numSections;
+    uint64_t coil_end = (*cur_thread+1) * numSections;
+    
+    /* loop over output data points */
+    for (coil=coil_start; coil<coil_end; coil++)
+    {
+        for (arm=0; arm<arms; arm++)
+        {
+            for (point=0; point<points_in_arm; point++)
+            {
+                complex<T> d = data(point,arm,coil) * weight(point,arm);
+                
+                /* get the coordinates of the datapoint to grid
+                 *  these vary between -.5 -- +.5               */
+                x = coords(0,point,arm);
+                y = coords(1,point,arm);
+                
+                /* add shift phase */
+                d *= exp( complex<T>(0, -2.*M_PI*(x*dx+y*dy)) );
+                
+                /* set the boundaries of final dataset for gridding this point */
+                ix = x * width + width_div2;
+                set_minmax(ix, &imin, &imax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+                jy = y * width + width_div2;
+                set_minmax(jy, &jmin, &jmax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+                
+                /* grid this point onto the neighboring cartesian points */
+                for (j=jmin; j<=jmax; ++j)
+                {
+                    jy = (j - width_div2) * width_inv;
+                    for (i=imin; i<=imax; ++i)
+                    {
+                        ix = (i - width_div2) * width_inv;
+                        T dist_sqr = dist2(ix - x, jy - y);
+                        if (dist_sqr < kernelRadius_sqr)
+                        {
+                            T ker = get1(kernel_table, (int) rint(dist_sqr * dist_multiplier));
+                            out(i,j,coil) += ker * d;
+                        }
+                    }// x
+                }// y
+            }//point in arms
+        } //arms
+    } //coil
+}
+
+/* the actual calling function for a threaded grid */
+template <class T>
+void _grid2_threaded(Array<complex<T> > *data, Array<T> *crds, Array<T> *weight, Array<complex<T> > *outdata, Array<T> *kernel, T dx, T dy, int num_threads)
+
+{
+    /* Make sure output array is initialized */
+    *outdata = complex<T>(0.0);
+    
+    /* start threads */
+    create_threads7(num_threads,
+                    itself(_grid2_thread<T>),
+                    data,
+                    crds,
+                    weight,
+                    outdata,
+                    kernel,
+                    dx,
+                    dy);
+    
+} // end grid2_threaded()
+
+/* GRID
+ *  data: nD array with 1-vec dimensions equal to coords array.
+ *  coords: nD array with 2-vec.
+ *  weights: nD array with 1-vec (dims equal to coords array).  This holds the
+ *           density compensation for each gridded point.
+ *  kernel_table: 1D array with Kaiser-Bessel kernel table
+ *  out: 2D array with equal dimensions (m == n).
+ *  dx, dy: scaler pixel shift in
+ */
+template<class T>
 void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<complex<T> > &out, Array<T> &kernel_table, T dx, T dy)
 {
     int imin, imax, jmin, jmax, i, j;
     int width = out.dimensions(0); // assume isotropic dims
     int width_div2 = width / 2;
-    uint64_t p;
+    uint64_t arms = 1;
+    uint64_t points_in_arm = 1;
+    uint64_t arms_times_coils = 1;
+    uint64_t coils = 1;
+    uint64_t coil, arm, point;
+    uint64_t width_times_coil = width;
     T x, y, ix, jy;
     T kernelRadius = DEFAULT_RADIUS_FOV_PRODUCT / width;
     T kernelRadius_sqr = kernelRadius * kernelRadius;
@@ -85,41 +202,61 @@ void _grid2(Array<complex<T> > &data, Array<T> &coords, Array<T> &weight, Array<
     T dist_multiplier = (kernel_table.dimensions(0) - 1)/kernelRadius_sqr;
 
     out = complex<T>(0.0);
-
-    for (p=0; p<data.size(); p++)
+    
+    if (coords.ndim() == 3)
     {
-        complex<T> d = data(p) * weight(p);
-
-        /* get the coordinates of the datapoint to grid
-         *  these vary between -.5 -- +.5               */
-        x = coords.get1v(p, 0);  
-        y = coords.get1v(p, 1);  
-
-        /* add shift phase */
-        d *= exp( complex<T>(0, -2.*M_PI*(x*dx+y*dy)) );
-
-        /* set the boundaries of final dataset for gridding this point */
-        ix = x * width + width_div2;
-        set_minmax(ix, &imin, &imax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
-        jy = y * width + width_div2;
-        set_minmax(jy, &jmin, &jmax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
-
-        /* grid this point onto the neighboring cartesian points */
-        for (j=jmin; j<=jmax; ++j)
-        {
-            jy = (j - width_div2) * width_inv;
-            for (i=imin; i<=imax; ++i)
-            {
-                ix = (i - width_div2) * width_inv;
-                T dist_sqr = dist2(ix - x, jy - y);
-                if (dist_sqr < kernelRadius_sqr)
-                {
-                    T ker = get1(kernel_table, (int) rint(dist_sqr * dist_multiplier));
-                    get2(out, i, j) += ker * d;
-                }
-            }
-        }
+        points_in_arm = coords.dimensions(1);
+        arms = coords.dimensions(2);
     }
+    
+    if (out.ndim() == 3)
+    {
+        coils = out.dimensions(2);
+    }
+    arms_times_coils = arms * coils;
+    width_times_coil = width * coils;
+    
+    /* loop over output data points */
+    for (coil=0; coil<coils; coil++)
+    {
+        for (arm=0; arm<arms; arm++)
+        {
+            for (point=0; point<points_in_arm; point++)
+            {
+                complex<T> d = data(point,arm,coil) * weight(point,arm);
+                
+                /* get the coordinates of the datapoint to grid
+                 *  these vary between -.5 -- +.5               */
+                x = coords(0,point,arm);
+                y = coords(1,point,arm);
+                
+                /* add shift phase */
+                d *= exp( complex<T>(0, -2.*M_PI*(x*dx+y*dy)) );
+                
+                /* set the boundaries of final dataset for gridding this point */
+                ix = x * width + width_div2;
+                set_minmax(ix, &imin, &imax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+                jy = y * width + width_div2;
+                set_minmax(jy, &jmin, &jmax, width, (T) DEFAULT_RADIUS_FOV_PRODUCT);
+                
+                /* grid this point onto the neighboring cartesian points */
+                for (j=jmin; j<=jmax; ++j)
+                {
+                    jy = (j - width_div2) * width_inv;
+                    for (i=imin; i<=imax; ++i)
+                    {
+                        ix = (i - width_div2) * width_inv;
+                        T dist_sqr = dist2(ix - x, jy - y);
+                        if (dist_sqr < kernelRadius_sqr)
+                        {
+                            T ker = get1(kernel_table, (int) rint(dist_sqr * dist_multiplier));
+                            out(i,j,coil) += ker * d;
+                        }
+                    }// x
+                }// y
+            }//point in arms
+        } //arms
+    } //coil
 }
 
 /* DEGRID

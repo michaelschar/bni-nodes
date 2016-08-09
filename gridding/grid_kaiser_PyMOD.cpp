@@ -54,10 +54,19 @@ PYFI_FUNC(grid)
     PYFI_POSARG(Array<int64_t>, outdim);
     PYFI_POSARG(double, dx);
     PYFI_POSARG(double, dy);
+    int64_t numThreadsDefault1 = 1;
+    PYFI_KWARG(int64_t, numThreads, numThreadsDefault1);
 
     PYFI_SETOUTPUT_ALLOC_DIMS(Array<complex<float> >, outdata, outdim->size(), outdim->as_ULONG());
 
-    _grid2(*data, *crds, *weights, *outdata, *kernel, (float)*dx, (float)*dy);
+    if (*numThreads > 1)
+    {
+        _grid2_threaded(data, crds, weights, outdata, kernel, (float)*dx, (float)*dy, *numThreads);
+        
+    } else
+    {
+        _grid2(*data, *crds, *weights, *outdata, *kernel, (float)*dx, (float)*dy);
+    }
 
     PYFI_END(); /* This must be the last line */
 } /* grid */

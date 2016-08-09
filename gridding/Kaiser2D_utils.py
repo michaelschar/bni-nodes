@@ -94,7 +94,7 @@ def fft2D(data, dir=0, out_dims_fft=[]):
 
     return corefft.fftw(data, outdims, **kwargs)
 
-def grid2D(data, coords, weights, kernel, out_dims):
+def grid2D(data, coords, weights, kernel, out_dims, number_threads=8):
     # data: np.float32
     # coords: np.complex64
     # weights: np.float32
@@ -104,6 +104,14 @@ def grid2D(data, coords, weights, kernel, out_dims):
     
     [nr_coils, extra_dim2, extra_dim1, mtx_xy, nr_arms, nr_points] = out_dims
     
+    # threading is done along the coil dimension. Limit the number of threads to the number of coils:
+    if number_threads > nr_coils:
+        number_threads = nr_coils
+    # make number_threads a divider of nr_coils:
+    while (nr_coils%number_threads != 0):
+        number_threads -= 1
+
+    
     # off-center in pixels.
     dx = dy = 0.
 
@@ -111,7 +119,7 @@ def grid2D(data, coords, weights, kernel, out_dims):
     gridded_kspace = np.zeros([nr_coils, extra_dim2, extra_dim1, mtx_xy, mtx_xy], dtype=data.dtype)
     
     # tell the grid routine what shape to produce
-    outdim = np.array([mtx_xy,mtx_xy], dtype=np.int64)
+    outdim = np.array([mtx_xy,mtx_xy,nr_coils], dtype=np.int64)
 
     # coordinate dimensions
     if coords.shape[0] == 1:
@@ -127,8 +135,8 @@ def grid2D(data, coords, weights, kernel, out_dims):
         else:
             extra1_coords = extra1
         for extra2 in range(extra_dim2):
-            for coil in range(nr_coils):
-                gridded_kspace[coil,extra2,extra1,:,:] = bni_grid.grid(coords[extra1_coords,:,:,:], data[coil,extra2,extra1,:,:], weights[extra1_coords,:,:], kernel, outdim, dx, dy)
+            #for coil in range(nr_coils):
+            gridded_kspace[:,extra2,extra1,:,:] = bni_grid.grid(coords[extra1_coords,:,:,:], data[:,extra2,extra1,:,:], weights[extra1_coords,:,:], kernel, outdim, dx, dy, numThreads=number_threads)
 
     return gridded_kspace
 
