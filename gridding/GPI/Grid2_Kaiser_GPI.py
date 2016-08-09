@@ -60,6 +60,7 @@ class ExternalNode(gpi.NodeAPI):
         self.addWidget('SpinBox','mtx size (n x n)', min=5, val=240)
         self.addWidget('Slider','dims per set', min=1, val=2)
         self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
+        self.addWidget('SpinBox', 'number of threads', val=8, min=1, max=64, collapsed=True)
         self.addWidget('PushButton', 'Add FFT and rolloff', toggle=True, button_title='ON', val=1)
 
         # IO Ports
@@ -109,6 +110,7 @@ class ExternalNode(gpi.NodeAPI):
         mtx_original = self.getVal('mtx size (n x n)')
         dimsperset = self.getVal('dims per set')
         oversampling_ratio = self.getVal('oversampling ratio')
+        number_threads = self.getVal('number of threads')
         fft_and_rolloff = self.getVal('Add FFT and rolloff')
 
         # Determine matrix size after oversampling
@@ -165,7 +167,7 @@ class ExternalNode(gpi.NodeAPI):
         
         # grid
         self.log.debug("before gridding")
-        gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid)
+        gridded_kspace = kaiser2D.grid2D(data, coords, weights, kernel, out_dims_grid, number_threads=number_threads)
         self.log.debug("after gridding")
         if fft_and_rolloff:
             # FFT
