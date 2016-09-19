@@ -261,12 +261,8 @@ class ExternalNode(gpi.NodeAPI):
             
             is_GoldenAngle_data = True
             nr_arms_csm = self.getVal('# golden angle dynamics for csm')
-            csm_data = data.copy()
             nr_all_arms_csm = extra_dim1 * nr_arms
-            #extra_dim2_csm = 1
             extra_dim1_csm = 1
-            #csm_data.shape = [nr_coils,extra_dim2_csm,extra_dim1_csm,nr_all_arms_csm,nr_points]
-            #csm_data = csm_data[:,0:nr_arms_csm,:]
             
             # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
             if coords.ndim == 3:
