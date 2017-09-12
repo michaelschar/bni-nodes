@@ -151,6 +151,9 @@ def autocalibrationB1Maps2D(images, taper=50, width=10, mask_floor=1, average_cs
     if ( (extra_dim1 > 1) and (average_csm) ):
         images_for_csm = images.sum(axis=-3)
         images_for_csm.shape = [nr_coils,extra_dim2,1,mtx,mtx]
+        if ( (extra_dim2 > 1) and (average_csm) ):
+            images_for_csm = images_for_csm.sum(axis=-4)
+            images_for_csm.shape = [nr_coils,1,1,mtx,mtx]
     else:
         images_for_csm = images
 
@@ -176,7 +179,7 @@ def autocalibrationB1Maps2D(images, taper=50, width=10, mask_floor=1, average_cs
         for coil in range(nr_coils):
             for extra2 in range(extra_dim2):
                 for extra1 in range(extra_dim1):
-                    out[coil,extra2,extra1,:,:] = csm[coil,extra2,0,:,:]
+                    out[coil,extra2,extra1,:,:] = csm[coil,0,0,:,:]
     else:
         out=csm
 
